@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BTC Live Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0d0f;
+      --surface:   #16181d;
+      --surface2:  #1e2028;
+      --border:    #2a2d38;
+      --text:      #e8eaf0;
+      --muted:     #7a7f94;
+      --accent:    #f7931a;
+      --green:     #00c97a;
+      --red:       #ff4757;
+      --blue:      #4a9eff;
+      --yellow:    #ffd447;
+      --radius:    10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .btc-icon {
+      width: 40px; height: 40px;
+      background: var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 18px; color: #fff;
+    }
+    .title { font-size: 22px; font-weight: 700; letter-spacing: -.4px; }
+    .subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    #refresh-badge {
+      font-size: 11px;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 12px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .3; }
+    }
+
+    /* ── Price strip ── */
+    .price-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .price-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 20px;
+      flex: 1 1 160px;
+    }
+    .price-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 6px; }
+    .price-card .value { font-size: 24px; font-weight: 700; }
+    .price-card .value.main { font-size: 32px; color: var(--accent); }
+    .up   { color: var(--green); }
+    .down { color: var(--red); }
+    .neu  { color: var(--muted); }
+
+    /* ── Signal box ── */
+    .signal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .signal-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+    .signal-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 22px;
+      border-radius: 40px;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: .5px;
+      border: 2px solid transparent;
+    }
+    .signal-pill.LONG  { background: rgba(0,201,122,.15); border-color: var(--green); color: var(--green); }
+    .signal-pill.SHORT { background: rgba(255,71,87,.15);  border-color: var(--red);   color: var(--red); }
+    .signal-pill.HOLD  { background: rgba(255,212,71,.10); border-color: var(--yellow); color: var(--yellow); }
+
+    .confidence-wrap { display: flex; flex-direction: column; gap: 4px; }
+    .confidence-bar-bg {
+      width: 200px; height: 8px;
+      background: var(--surface2);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .confidence-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width .6s ease;
+    }
+    .confidence-bar-fill.LONG  { background: var(--green); }
+    .confidence-bar-fill.SHORT { background: var(--red); }
+    .confidence-bar-fill.HOLD  { background: var(--yellow); }
+    .confidence-pct { font-size: 28px; font-weight: 700; }
+
+    /* ── Indicators grid ── */
+    .indicators-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .ind-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+    }
+    .ind-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .ind-name { font-weight: 600; font-size: 13px; }
+    .ind-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 20px;
+      text-transform: uppercase;
+    }
+    .badge-bull  { background: rgba(0,201,122,.2);  color: var(--green); }
+    .badge-bear  { background: rgba(255,71,87,.2);   color: var(--red); }
+    .badge-neut  { background: rgba(255,212,71,.15); color: var(--yellow); }
+    .ind-value { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+    .ind-reason { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+    /* ── Timeframe tabs ── */
+    .tf-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .tf-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 6px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all .2s;
+    }
+    .tf-btn:hover { border-color: var(--accent); color: var(--text); }
+    .tf-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* ── Chart ── */
+    .chart-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      height: 520px;
+    }
+    #tv-chart { width: 100%; height: 100%; }
+
+    /* ── Footer ── */
+    .footer {
+      margin-top: 16px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* spinner */
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<div class="header">
+  <div class="header-left">
+    <div class="btc-icon">₿</div>
+    <div>
+      <div class="title">BTC / USDT</div>
+      <div class="subtitle">Live Trading Dashboard · Binance</div>
+    </div>
+  </div>
+  <div id="refresh-badge">
+    <span class="dot"></span>
+    <span id="refresh-txt">Loading…</span>
+  </div>
+</div>
+
+<!-- ── Price strip ── -->
+<div class="price-strip">
+  <div class="price-card">
+    <div class="label">Last Price</div>
+    <div class="value main" id="p-price">—</div>
+  </div>
+  <div class="price-card">
+    <div class="label">24h Change</div>
+    <div class="value" id="p-change">—</div>
+  </div>
+  <div class="price-card">
+    <div class="label">24h High</div>
+    <div class="value up" id="p-high">—</div>
+  </div>
+  <div class="price-card">
+    <div class="label">24h Low</div>
+    <div class="value down" id="p-low">—</div>
+  </div>
+  <div class="price-card">
+    <div class="label">24h Volume (BTC)</div>
+    <div class="value" id="p-vol">—</div>
+  </div>
+</div>
+
+<!-- ── Signal ── -->
+<div class="signal-box">
+  <div>
+    <div class="signal-label">Trading Signal</div>
+    <div class="signal-pill HOLD" id="signal-pill">
+      <span id="signal-icon">⏸</span>
+      <span id="signal-text">HOLD</span>
+    </div>
+  </div>
+  <div class="confidence-wrap">
+    <div class="signal-label">Confidence</div>
+    <div class="confidence-pct" id="conf-pct">—</div>
+    <div class="confidence-bar-bg">
+      <div class="confidence-bar-fill HOLD" id="conf-bar" style="width:0%"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Indicators ── -->
+<div class="indicators-grid" id="ind-grid">
+  <!-- filled by JS -->
+</div>
+
+<!-- ── Chart ── -->
+<div class="tf-row" id="tf-row">
+  <button class="tf-btn" data-tv="1"   data-label="1m">1m</button>
+  <button class="tf-btn" data-tv="5"   data-label="5m">5m</button>
+  <button class="tf-btn active" data-tv="15"  data-label="15m">15m</button>
+  <button class="tf-btn" data-tv="60"  data-label="1H">1H</button>
+  <button class="tf-btn" data-tv="240" data-label="4H">4H</button>
+  <button class="tf-btn" data-tv="D"   data-label="1D">1D</button>
+</div>
+<div class="chart-wrap">
+  <div id="tv-chart"></div>
+</div>
+
+<div class="footer">
+  Data: Binance REST API · Chart: TradingView Widget · Refreshes every 10 s · Not financial advice.
+</div>
+
+<!-- TradingView Widget -->
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+<script>
+/* ─────────────────────────────────────────────
+   TradingView chart
+───────────────────────────────────────────── */
+let tvWidget = null;
+let currentTf = '15';
+
+function buildChart(interval) {
+  document.getElementById('tv-chart').innerHTML = '';
+  tvWidget = new TradingView.widget({
+    container_id: 'tv-chart',
+    symbol:        'BINANCE:BTCUSDT',
+    interval:      interval,
+    timezone:      'Etc/UTC',
+    theme:         'dark',
+    style:         '1',
+    locale:        'en',
+    toolbar_bg:    '#16181d',
+    enable_publishing: false,
+    hide_side_toolbar: false,
+    allow_symbol_change: false,
+    studies: ['RSI@tv-basicstudies', 'MAExp@tv-basicstudies', 'MACD@tv-basicstudies'],
+    width:  '100%',
+    height: '100%',
+    autosize: true,
+  });
+}
+
+buildChart(currentTf);
+
+document.getElementById('tf-row').addEventListener('click', e => {
+  const btn = e.target.closest('.tf-btn');
+  if (!btn) return;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentTf = btn.dataset.tv;
+  buildChart(currentTf);
+});
+
+/* ─────────────────────────────────────────────
+   Indicator math helpers
+───────────────────────────────────────────── */
+
+function ema(values, period) {
+  const k = 2 / (period + 1);
+  let e = values[0];
+  for (let i = 1; i < values.length; i++) e = values[i] * k + e * (1 - k);
+  return e;
+}
+
+function emaArray(values, period) {
+  const k = 2 / (period + 1);
+  const out = [values[0]];
+  for (let i = 1; i < values.length; i++) out.push(values[i] * k + out[i - 1] * (1 - k));
+  return out;
+}
+
+function rsi(closes, period = 14) {
+  if (closes.length < period + 1) return null;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d >= 0) gains += d; else losses -= d;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + (d > 0 ? d : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  return 100 - 100 / (1 + avgGain / avgLoss);
+}
+
+function macd(closes) {
+  if (closes.length < 35) return null;
+  const ema12arr = emaArray(closes, 12);
+  const ema26arr = emaArray(closes, 26);
+  const macdLine = ema12arr.map((v, i) => v - ema26arr[i]);
+  const signal   = emaArray(macdLine.slice(-9), 9);
+  const macdVal  = macdLine[macdLine.length - 1];
+  const sigVal   = signal[signal.length - 1];
+  return { macd: macdVal, signal: sigVal, hist: macdVal - sigVal };
+}
+
+/* ─────────────────────────────────────────────
+   Signal engine
+───────────────────────────────────────────── */
+function computeSignal({ rsiVal, ema20val, ema50val, macdData, volTrend, change24h, price }) {
+  const signals = [];   // each: { weight, bull } (bull=1, bear=-1, neut=0)
+  const reasons = {};
+
+  // RSI(14)
+  let rsiBull = 0, rsiReason = '';
+  if (rsiVal !== null) {
+    if (rsiVal < 30)      { rsiBull =  1; rsiReason = `Oversold (${rsiVal.toFixed(1)}) — potential reversal up`; }
+    else if (rsiVal > 70) { rsiBull = -1; rsiReason = `Overbought (${rsiVal.toFixed(1)}) — potential reversal down`; }
+    else if (rsiVal < 45) { rsiBull =  0.5; rsiReason = `Mildly bearish (${rsiVal.toFixed(1)})`; }
+    else if (rsiVal > 55) { rsiBull =  0.5; rsiReason = `Mildly bullish (${rsiVal.toFixed(1)})`; }
+    else                  { rsiBull =  0; rsiReason = `Neutral zone (${rsiVal.toFixed(1)})`; }
+  }
+  signals.push({ weight: 2, value: rsiBull });
+  reasons.rsi = rsiReason;
+
+  // EMA cross
+  let emaBull = 0, emaReason = '';
+  if (ema20val && ema50val) {
+    const spread = ((ema20val - ema50val) / ema50val) * 100;
+    if (ema20val > ema50val) {
+      emaBull = Math.min(1, spread / 2);
+      emaReason = `EMA20 (${fmt(ema20val)}) above EMA50 (${fmt(ema50val)}) — bullish trend`;
+    } else {
+      emaBull = -Math.min(1, Math.abs(spread) / 2);
+      emaReason = `EMA20 (${fmt(ema20val)}) below EMA50 (${fmt(ema50val)}) — bearish trend`;
+    }
+  }
+  signals.push({ weight: 2, value: emaBull });
+  reasons.ema = emaReason;
+
+  // MACD
+  let macdBull = 0, macdReason = '';
+  if (macdData) {
+    if (macdData.hist > 0 && macdData.macd > 0)        { macdBull =  1; macdReason = 'MACD histogram positive + above zero — strong bull'; }
+    else if (macdData.hist > 0 && macdData.macd <= 0)  { macdBull =  0.5; macdReason = 'MACD histogram flipping positive — potential bull cross'; }
+    else if (macdData.hist < 0 && macdData.macd < 0)   { macdBull = -1; macdReason = 'MACD histogram negative + below zero — strong bear'; }
+    else                                                { macdBull = -0.5; macdReason = 'MACD histogram flipping negative — potential bear cross'; }
+  }
+  signals.push({ weight: 2, value: macdBull });
+  reasons.macd = macdReason;
+
+  // Volume trend
+  let volBull = 0, volReason = '';
+  if (volTrend !== null) {
+    if (volTrend > 1.3)       { volBull =  0.5; volReason = `High volume (+${((volTrend-1)*100).toFixed(0)}% vs avg) — confirms move`; }
+    else if (volTrend < 0.7)  { volBull = -0.3; volReason = `Low volume (${((volTrend-1)*100).toFixed(0)}% vs avg) — weak conviction`; }
+    else                      { volBull =  0;   volReason = `Average volume (${(volTrend*100).toFixed(0)}% of avg)`; }
+  }
+  signals.push({ weight: 1, value: volBull });
+  reasons.vol = volReason;
+
+  // 24h change
+  let changeBull = 0, changeReason = '';
+  if (change24h !== null) {
+    if (change24h > 3)        { changeBull =  0.8; changeReason = `Strong 24h gain +${change24h.toFixed(2)}%`; }
+    else if (change24h > 0)   { changeBull =  0.3; changeReason = `Positive 24h +${change24h.toFixed(2)}%`; }
+    else if (change24h > -3)  { changeBull = -0.3; changeReason = `Negative 24h ${change24h.toFixed(2)}%`; }
+    else                      { changeBull = -0.8; changeReason = `Strong 24h loss ${change24h.toFixed(2)}%`; }
+  }
+  signals.push({ weight: 1, value: changeBull });
+  reasons.change = changeReason;
+
+  // Weighted score  →  [-1, +1]
+  const totalWeight = signals.reduce((s, x) => s + x.weight, 0);
+  const score       = signals.reduce((s, x) => s + x.value * x.weight, 0) / totalWeight;
+
+  let signal, confidence;
+  const abs = Math.abs(score);
+
+  if (score > 0.25)      { signal = 'LONG';  confidence = Math.round(50 + abs * 50); }
+  else if (score < -0.25){ signal = 'SHORT'; confidence = Math.round(50 + abs * 50); }
+  else                   { signal = 'HOLD';  confidence = Math.round(50 - abs * 100); }
+
+  confidence = Math.max(50, Math.min(99, confidence));
+
+  return { signal, confidence, score, reasons };
+}
+
+/* ─────────────────────────────────────────────
+   UI helpers
+───────────────────────────────────────────── */
+const fmt = n => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtNum = n => Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+function updatePriceStrip({ price, change24h, high24h, low24h, volume24h }) {
+  document.getElementById('p-price').textContent = fmt(price);
+  const changeEl = document.getElementById('p-change');
+  const sign = change24h >= 0 ? '+' : '';
+  changeEl.textContent = `${sign}${change24h.toFixed(2)}%`;
+  changeEl.className = 'value ' + (change24h >= 0 ? 'up' : 'down');
+  document.getElementById('p-high').textContent = fmt(high24h);
+  document.getElementById('p-low').textContent  = fmt(low24h);
+  document.getElementById('p-vol').textContent  = fmtNum(volume24h);
+}
+
+function updateSignal(result) {
+  const { signal, confidence } = result;
+  const pill = document.getElementById('signal-pill');
+  pill.className = `signal-pill ${signal}`;
+  const icons = { LONG: '▲', SHORT: '▼', HOLD: '⏸' };
+  document.getElementById('signal-icon').textContent = icons[signal];
+  document.getElementById('signal-text').textContent = `GO ${signal === 'HOLD' ? 'HOLD' : signal}`;
+  if (signal === 'HOLD') document.getElementById('signal-text').textContent = 'HOLD';
+
+  document.getElementById('conf-pct').textContent = confidence + '%';
+  const bar = document.getElementById('conf-bar');
+  bar.style.width = confidence + '%';
+  bar.className = `confidence-bar-fill ${signal}`;
+}
+
+function badge(cls, label) {
+  return `<span class="ind-badge ${cls}">${label}</span>`;
+}
+
+function updateIndicators({ rsiVal, ema20val, ema50val, macdData, volTrend, change24h, price, reasons }) {
+  const cards = [
+    {
+      name: 'RSI (14)',
+      value: rsiVal !== null ? rsiVal.toFixed(2) : '—',
+      cls:   rsiVal < 30 ? 'badge-bull' : rsiVal > 70 ? 'badge-bear' : 'badge-neut',
+      lbl:   rsiVal < 30 ? 'OVERSOLD'  : rsiVal > 70 ? 'OVERBOUGHT' : 'NEUTRAL',
+      reason: reasons.rsi,
+    },
+    {
+      name: 'EMA Cross (20/50)',
+      value: ema20val ? `${fmt(ema20val)} / ${fmt(ema50val)}` : '—',
+      cls:   ema20val > ema50val ? 'badge-bull' : 'badge-bear',
+      lbl:   ema20val > ema50val ? 'BULLISH' : 'BEARISH',
+      reason: reasons.ema,
+    },
+    {
+      name: 'MACD (12/26/9)',
+      value: macdData ? `${macdData.macd.toFixed(2)} / ${macdData.signal.toFixed(2)}` : '—',
+      cls:   macdData && macdData.hist > 0 ? 'badge-bull' : macdData && macdData.hist < 0 ? 'badge-bear' : 'badge-neut',
+      lbl:   macdData && macdData.hist > 0 ? 'BULL CROSS' : macdData && macdData.hist < 0 ? 'BEAR CROSS' : 'NEUTRAL',
+      reason: reasons.macd,
+    },
+    {
+      name: 'Volume Trend',
+      value: volTrend !== null ? `${(volTrend * 100).toFixed(0)}% of avg` : '—',
+      cls:   volTrend > 1.3 ? 'badge-bull' : volTrend < 0.7 ? 'badge-bear' : 'badge-neut',
+      lbl:   volTrend > 1.3 ? 'HIGH VOL'  : volTrend < 0.7 ? 'LOW VOL'   : 'AVERAGE',
+      reason: reasons.vol,
+    },
+    {
+      name: '24h Change',
+      value: change24h !== null ? `${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%` : '—',
+      cls:   change24h > 1 ? 'badge-bull' : change24h < -1 ? 'badge-bear' : 'badge-neut',
+      lbl:   change24h > 1 ? 'BULLISH'   : change24h < -1 ? 'BEARISH'   : 'NEUTRAL',
+      reason: reasons.change,
+    },
+    {
+      name: 'Price vs EMA20',
+      value: ema20val ? (price > ema20val ? 'Above EMA20' : 'Below EMA20') : '—',
+      cls:   ema20val && price > ema20val ? 'badge-bull' : 'badge-bear',
+      lbl:   ema20val && price > ema20val ? 'BULLISH' : 'BEARISH',
+      reason: ema20val
+        ? `Price (${fmt(price)}) is ${price > ema20val ? 'above' : 'below'} EMA20 (${fmt(ema20val)}) — ${price > ema20val ? 'bullish' : 'bearish'} short-term bias`
+        : 'Insufficient data',
+    },
+  ];
+
+  document.getElementById('ind-grid').innerHTML = cards.map(c => `
+    <div class="ind-card">
+      <div class="ind-header">
+        <span class="ind-name">${c.name}</span>
+        ${badge(c.cls, c.lbl)}
+      </div>
+      <div class="ind-value">${c.value}</div>
+      <div class="ind-reason">${c.reason}</div>
+    </div>
+  `).join('');
+}
+
+/* ─────────────────────────────────────────────
+   Binance data fetch
+───────────────────────────────────────────── */
+async function fetchTicker() {
+  const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+  return r.json();
+}
+
+// fetch enough 1h candles for all indicators (we need ≥ 50 for EMA50)
+async function fetchKlines(limit = 100) {
+  const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=${limit}`);
+  const raw = await r.json();
+  // [openTime, open, high, low, close, volume, ...]
+  return raw.map(k => ({
+    open:   parseFloat(k[1]),
+    high:   parseFloat(k[2]),
+    low:    parseFloat(k[3]),
+    close:  parseFloat(k[4]),
+    volume: parseFloat(k[5]),
+  }));
+}
+
+async function refresh() {
+  document.getElementById('refresh-txt').innerHTML = '<span class="spinner"></span> Updating…';
+  try {
+    const [ticker, klines] = await Promise.all([fetchTicker(), fetchKlines(100)]);
+
+    const price    = parseFloat(ticker.lastPrice);
+    const change24h= parseFloat(ticker.priceChangePercent);
+    const high24h  = parseFloat(ticker.highPrice);
+    const low24h   = parseFloat(ticker.lowPrice);
+    const volume24h= parseFloat(ticker.volume);
+
+    const closes  = klines.map(k => k.close);
+    const volumes = klines.map(k => k.volume);
+
+    const rsiVal  = rsi(closes, 14);
+    const ema20arr = emaArray(closes, 20);
+    const ema50arr = emaArray(closes, 50);
+    const ema20val = ema20arr[ema20arr.length - 1];
+    const ema50val = ema50arr[ema50arr.length - 1];
+    const macdData = macd(closes);
+
+    // volume trend: last candle vs avg of prior 20
+    const recentVol = volumes[volumes.length - 1];
+    const avgVol    = volumes.slice(-21, -1).reduce((s, v) => s + v, 0) / 20;
+    const volTrend  = avgVol > 0 ? recentVol / avgVol : 1;
+
+    const indicators = { rsiVal, ema20val, ema50val, macdData, volTrend, change24h, price };
+    const result     = computeSignal(indicators);
+
+    updatePriceStrip({ price, change24h, high24h, low24h, volume24h });
+    updateSignal(result);
+    updateIndicators({ ...indicators, reasons: result.reasons });
+
+    const now = new Date().toLocaleTimeString();
+    document.getElementById('refresh-txt').textContent = `Live · Updated ${now}`;
+  } catch (err) {
+    console.error(err);
+    document.getElementById('refresh-txt').textContent = 'Error fetching data — retrying…';
+  }
+}
+
+// Kick off immediately, then every 10 s
+refresh();
+setInterval(refresh, 10_000);
+</script>
+</body>
+</html>
