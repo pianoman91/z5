@@ -112,7 +112,7 @@
     <div class="btc-icon">₿</div>
     <div>
       <div class="title">BTC / USDT</div>
-      <div class="subtitle">Leveraged Day Trading Dashboard · Binance 15m</div>
+      <div class="subtitle">Leveraged Day Trading Dashboard · Binance 15m + 1m</div>
     </div>
   </div>
   <div id="refresh-badge"><span class="dot"></span><span id="refresh-txt">Loading…</span></div>
@@ -174,7 +174,7 @@
 </div>
 <div class="chart-wrap"><div id="tv-chart"></div></div>
 
-<div class="footer">Data: Binance REST API (15m candles) · Chart: TradingView · Auto-refresh every 10s · Not financial advice</div>
+<div class="footer">Data: Binance REST API (200×15m + 120×1m candles) · Chart: TradingView · Auto-refresh every 5s · Not financial advice</div>
 
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
@@ -390,7 +390,9 @@ function computeSignal(d) {
     price, rsiVal, stochRsiVal, ema9, ema21, ema50,
     macdData, bbData, atrVal, adxVal, obvSeries,
     volTrend, change24h, pivotHighs, pivotLows,
-    candles, srData, structure, channel, pattern
+    candles, srData, structure, channel, pattern,
+    // 1m scalp inputs
+    m1rsi, m1stochRsi, m1ema9, m1ema21, m1macd, m1volTrend, m1pattern, m1candles
   } = d;
 
   const factors = [];   // {name, weight, score[-1..1], bull}
@@ -539,6 +541,72 @@ function computeSignal(d) {
   factors.push({name:'24h Session Bias', weight:0.8, score:chBull, cls:chCls});
   reasons.change = chReason;
 
+  // ── 1m Scalp: RSI (weight 1.5) ──
+  if (m1rsi!=null) {
+    let s=0,r='',c='neut';
+    if      (m1rsi<25)  {s=1;   r=`1m RSI ${m1rsi.toFixed(1)} — extreme OS, scalp long`;c='bull';}
+    else if (m1rsi<35)  {s=0.8; r=`1m RSI ${m1rsi.toFixed(1)} — oversold, entry opportunity`;c='bull';}
+    else if (m1rsi<45)  {s=0.2; r=`1m RSI ${m1rsi.toFixed(1)} — leaning bullish`;c='bull';}
+    else if (m1rsi>75)  {s=-1;  r=`1m RSI ${m1rsi.toFixed(1)} — extreme OB, scalp short`;c='bear';}
+    else if (m1rsi>65)  {s=-0.8;r=`1m RSI ${m1rsi.toFixed(1)} — overbought, fade the move`;c='bear';}
+    else if (m1rsi>55)  {s=-0.2;r=`1m RSI ${m1rsi.toFixed(1)} — leaning bearish`;c='bear';}
+    else                {s=0;   r=`1m RSI ${m1rsi.toFixed(1)} — neutral`;c='neut';}
+    factors.push({name:'1m RSI', weight:1.5, score:s, cls:c}); reasons.m1rsi=r;
+  }
+
+  // ── 1m Scalp: StochRSI (weight 1.2) ──
+  if (m1stochRsi!=null) {
+    let s=0,r='',c='neut';
+    if      (m1stochRsi<10)  {s=1;    r=`1m StochRSI ${m1stochRsi.toFixed(0)} — deeply OS, snap-back likely`;c='bull';}
+    else if (m1stochRsi<20)  {s=0.7;  r=`1m StochRSI ${m1stochRsi.toFixed(0)} — oversold on 1m`;c='bull';}
+    else if (m1stochRsi>90)  {s=-1;   r=`1m StochRSI ${m1stochRsi.toFixed(0)} — deeply OB, scalp reversal`;c='bear';}
+    else if (m1stochRsi>80)  {s=-0.7; r=`1m StochRSI ${m1stochRsi.toFixed(0)} — overbought on 1m`;c='bear';}
+    else if (m1stochRsi>50)  {s=0.3;  r=`1m StochRSI ${m1stochRsi.toFixed(0)} — above mid, bull micro-trend`;c='bull';}
+    else                     {s=-0.3; r=`1m StochRSI ${m1stochRsi.toFixed(0)} — below mid, bear micro-trend`;c='bear';}
+    factors.push({name:'1m StochRSI', weight:1.2, score:s, cls:c}); reasons.m1stoch=r;
+  }
+
+  // ── 1m Scalp: EMA cross 9/21 (weight 1.5) ──
+  if (m1ema9&&m1ema21) {
+    let s=0,r='',c='neut';
+    const spread1m=((m1ema9-m1ema21)/m1ema21)*100;
+    if (price>m1ema9&&m1ema9>m1ema21)       {s=1;    r=`1m: Price>${fmt(m1ema9)}>EMA21 — full micro bull stack`;c='bull';}
+    else if (price<m1ema9&&m1ema9<m1ema21)  {s=-1;   r=`1m: Price<${fmt(m1ema9)}<EMA21 — full micro bear stack`;c='bear';}
+    else if (m1ema9>m1ema21)                 {s=0.5;  r=`1m EMA9 above EMA21 — micro bullish cross`;c='bull';}
+    else                                     {s=-0.5; r=`1m EMA9 below EMA21 — micro bearish cross`;c='bear';}
+    factors.push({name:'1m EMA (9/21)', weight:1.5, score:s, cls:c}); reasons.m1ema=r;
+  }
+
+  // ── 1m Scalp: MACD (weight 1.5) ──
+  if (m1macd) {
+    let s=0,r='',c='neut';
+    const hg=m1macd.hist>m1macd.prevHist;
+    if      (m1macd.hist>0&&m1macd.macd>0&&hg)   {s=1;    r='1m MACD hist growing above zero — strong bull scalp';c='bull';}
+    else if (m1macd.hist>0&&m1macd.macd>0)        {s=0.6;  r='1m MACD positive — bull momentum';c='bull';}
+    else if (m1macd.hist>0&&m1macd.macd<=0)       {s=0.4;  r='1m MACD hist flipping up — early bull cross';c='bull';}
+    else if (m1macd.hist<0&&m1macd.macd<0&&!hg)  {s=-1;   r='1m MACD hist falling below zero — strong bear scalp';c='bear';}
+    else if (m1macd.hist<0&&m1macd.macd<0)        {s=-0.6; r='1m MACD negative — bear momentum';c='bear';}
+    else                                           {s=-0.4; r='1m MACD hist flipping down — early bear cross';c='bear';}
+    factors.push({name:'1m MACD', weight:1.5, score:s, cls:c}); reasons.m1macd=r;
+  }
+
+  // ── 1m Scalp: volume (weight 0.8) ──
+  if (m1volTrend!=null&&m1candles) {
+    const lc=last(m1candles), dir=lc.close>=lc.open?1:-1;
+    let s=0,r='',c='neut';
+    if      (m1volTrend>2.0) {s=dir*0.9; r=`1m vol spike ${(m1volTrend*100).toFixed(0)}% avg — ${dir>0?'bull':'bear'} impulse`;c=dir>0?'bull':'bear';}
+    else if (m1volTrend>1.4) {s=dir*0.5; r=`1m elevated vol ${(m1volTrend*100).toFixed(0)}% avg — confirms ${dir>0?'up':'down'}`;c=dir>0?'bull':'bear';}
+    else                     {s=0;        r=`1m normal volume`;c='neut';}
+    factors.push({name:'1m Volume', weight:0.8, score:s, cls:c}); reasons.m1vol=r;
+  }
+
+  // ── 1m Scalp: candle pattern (weight 0.8) ──
+  if (m1pattern) {
+    factors.push({name:'1m Candle Pattern', weight:0.8, score:m1pattern.bias,
+      cls:m1pattern.bias>0.3?'bull':m1pattern.bias<-0.3?'bear':'neut'});
+    reasons.m1candle=`1m: ${m1pattern.name}${m1pattern.bias===0?' — no bias':m1pattern.bias>0?' — bullish':' — bearish'}`;
+  }
+
   // ── ADX modifier ──
   let adxMult = 1;
   if (adxVal!=null) {
@@ -656,7 +724,8 @@ function bCls(cls) { return `badge-${cls}`; }
 function badge(cls,lbl) { return `<span class="ind-badge ${bCls(cls)}">${lbl}</span>`; }
 
 function updateIndicators(d, result) {
-  const {rsiVal,stochRsiVal,ema9,ema21,ema50,macdData,bbData,atrVal,adxVal,volTrend,change24h,price,candles,pattern,srData} = d;
+  const {rsiVal,stochRsiVal,ema9,ema21,ema50,macdData,bbData,atrVal,adxVal,volTrend,change24h,price,candles,pattern,srData,
+         m1rsi,m1stochRsi,m1ema9,m1ema21,m1macd,m1volTrend,m1pattern} = d;
   const {reasons} = result;
 
   const cards = [
@@ -740,6 +809,46 @@ function updateIndicators(d, result) {
       lbl: change24h>2?'BULLISH':change24h<-2?'BEARISH':'NEUTRAL',
       why: reasons.change,
     },
+    // ── 1m scalp cards ──
+    {
+      name:'1m RSI (14)', val: m1rsi!=null?m1rsi.toFixed(2):'—',
+      cls: m1rsi<35?'bull':m1rsi>65?'bear':'neut',
+      lbl: m1rsi<35?'OS':m1rsi>65?'OB':'NEUTRAL',
+      why: reasons.m1rsi||'—',
+    },
+    {
+      name:'1m StochRSI', val: m1stochRsi!=null?m1stochRsi.toFixed(1):'—',
+      cls: m1stochRsi<20?'bull':m1stochRsi>80?'bear':'neut',
+      lbl: m1stochRsi<20?'OVERSOLD':m1stochRsi>80?'OVERBOUGHT':'NEUTRAL',
+      why: reasons.m1stoch||'—',
+    },
+    {
+      name:'1m EMA (9/21)',
+      val: m1ema9&&m1ema21?`${fmt(m1ema9)} / ${fmt(m1ema21)}`:'—',
+      cls: m1ema9>m1ema21?'bull':'bear',
+      lbl: m1ema9>m1ema21?'BULLISH':'BEARISH',
+      why: reasons.m1ema||'—',
+    },
+    {
+      name:'1m MACD',
+      val: m1macd?`${m1macd.macd.toFixed(1)} / ${m1macd.signal.toFixed(1)}`:'—',
+      cls: m1macd&&m1macd.hist>0?'bull':m1macd&&m1macd.hist<0?'bear':'neut',
+      lbl: m1macd&&m1macd.hist>0?'BULL':'BEAR',
+      why: reasons.m1macd||'—',
+    },
+    {
+      name:'1m Candle Pattern', val: m1pattern?m1pattern.name:'—',
+      cls: m1pattern&&m1pattern.bias>0.3?'bull':m1pattern&&m1pattern.bias<-0.3?'bear':'neut',
+      lbl: m1pattern&&m1pattern.bias>0.3?'BULLISH':m1pattern&&m1pattern.bias<-0.3?'BEARISH':'NEUTRAL',
+      why: reasons.m1candle||'—',
+    },
+    {
+      name:'1m Volume Spike',
+      val: m1volTrend!=null?`${(m1volTrend*100).toFixed(0)}% of 20-bar avg`:'—',
+      cls: m1volTrend>1.5?'bull':m1volTrend<0.6?'bear':'neut',
+      lbl: m1volTrend>1.5?'HIGH':m1volTrend<0.6?'LOW':'AVERAGE',
+      why: reasons.m1vol||'—',
+    },
   ];
 
   document.getElementById('ind-grid').innerHTML = cards.map(c => `
@@ -766,7 +875,9 @@ async function fetchKlines(interval='15m', limit=200) {
 async function refresh() {
   document.getElementById('refresh-txt').innerHTML='<span class="spinner"></span> Updating…';
   try {
-    const [ticker, candles] = await Promise.all([fetchTicker(), fetchKlines('15m',200)]);
+    const [ticker, candles, c1m] = await Promise.all([
+      fetchTicker(), fetchKlines('15m',200), fetchKlines('1m',120)
+    ]);
 
     const price     = +ticker.lastPrice;
     const change24h = +ticker.priceChangePercent;
@@ -774,10 +885,9 @@ async function refresh() {
     const low24h    = +ticker.lowPrice;
     const volume24h = +ticker.volume;
 
+    // ── 15m indicators ──
     const closes  = candles.map(c=>c.close);
     const volumes = candles.map(c=>c.volume);
-
-    // indicators
     const rsiArr      = rsiSeries(closes,14);
     const rsiVal      = rsiArr.length ? last(rsiArr) : null;
     const stochRsiVal = stochRsi(closes,14,14);
@@ -789,25 +899,40 @@ async function refresh() {
     const atrVal      = atrCalc(candles,14);
     const adxVal      = adxCalc(candles,14);
     const obvSeries   = obvCalc(candles);
+    const recentVol   = last(volumes);
+    const avgVol      = volumes.slice(-21,-1).reduce((s,v)=>s+v,0)/20;
+    const volTrend    = avgVol>0 ? recentVol/avgVol : 1;
 
-    // volume trend vs 20-bar avg
-    const recentVol = last(volumes);
-    const avgVol    = volumes.slice(-21,-1).reduce((s,v)=>s+v,0)/20;
-    const volTrend  = avgVol>0 ? recentVol/avgVol : 1;
-
-    // structure
+    // ── 15m structure ──
     const {highs:pivotHighs, lows:pivotLows} = findPivots(candles,3);
     const structure = marketStructure(pivotHighs,pivotLows);
     const srData    = atrVal ? findSR(pivotHighs,pivotLows,price,atrVal) : null;
     const channel   = detectChannel(pivotHighs,pivotLows);
     const pattern   = candlePattern(candles);
 
+    // ── 1m scalp indicators ──
+    const cl1m        = c1m.map(c=>c.close);
+    const vol1m       = c1m.map(c=>c.volume);
+    const rsi1mArr    = rsiSeries(cl1m,14);
+    const m1rsi       = rsi1mArr.length ? last(rsi1mArr) : null;
+    const m1stochRsi  = stochRsi(cl1m,14,14);
+    const m1ema9      = last(emaArray(cl1m,9));
+    const m1ema21     = last(emaArray(cl1m,21));
+    const m1macd      = macdCalc(cl1m);
+    const m1pattern   = candlePattern(c1m);
+    const m1recentVol = last(vol1m);
+    const m1avgVol    = vol1m.slice(-21,-1).reduce((s,v)=>s+v,0)/20;
+    const m1volTrend  = m1avgVol>0 ? m1recentVol/m1avgVol : 1;
+
     const d = {
       price, change24h, high24h, low24h, volume24h,
       rsiVal, stochRsiVal, ema9, ema21, ema50,
       macdData, bbData, atrVal, adxVal, obvSeries,
       volTrend, pivotHighs, pivotLows, candles,
-      structure, srData, channel, pattern
+      structure, srData, channel, pattern,
+      // 1m
+      m1rsi, m1stochRsi, m1ema9, m1ema21, m1macd,
+      m1volTrend, m1pattern, m1candles: c1m
     };
 
     const result = computeSignal(d);
@@ -825,7 +950,7 @@ async function refresh() {
 }
 
 refresh();
-setInterval(refresh, 10_000);
+setInterval(refresh, 5_000);
 </script>
 </body>
 </html>
