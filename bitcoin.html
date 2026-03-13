@@ -193,9 +193,10 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       overflow: hidden;
-      height: 780px;
+      height: clamp(600px, calc(100vh - 380px), 1200px);
     }
     #tv-chart { width: 100%; height: 100%; }
+    #tv-chart iframe { width: 100% !important; height: 100% !important; }
 
     /* ── Footer ── */
     .footer {
@@ -309,7 +310,9 @@ let tvWidget = null;
 let currentTf = '15';
 
 function buildChart(interval) {
-  document.getElementById('tv-chart').innerHTML = '';
+  const wrap = document.getElementById('tv-chart');
+  wrap.innerHTML = '';
+  const h = wrap.parentElement.clientHeight || 700;
   tvWidget = new TradingView.widget({
     container_id: 'tv-chart',
     symbol:        'BINANCE:BTCUSDT',
@@ -324,8 +327,7 @@ function buildChart(interval) {
     allow_symbol_change: false,
     studies: ['RSI@tv-basicstudies', 'MAExp@tv-basicstudies', 'MACD@tv-basicstudies'],
     width:  '100%',
-    height: '100%',
-    autosize: true,
+    height: h,
   });
 }
 
