@@ -102,6 +102,38 @@
     .footer { margin-top:16px;text-align:center;font-size:11px;color:var(--muted); }
     .spinner { display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle; }
     @keyframes spin { to{transform:rotate(360deg)} }
+
+    /* ── Position buttons ── */
+    .pos-btns { display:flex;gap:12px;margin-top:14px;margin-bottom:12px;flex-wrap:wrap; }
+    .pos-btn { padding:11px 26px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;border:2px solid transparent;background:var(--surface);transition:all .2s;letter-spacing:.3px; }
+    .pos-btn-long  { border-color:var(--green);color:var(--green); }
+    .pos-btn-long:hover  { background:rgba(0,201,122,.15); }
+    .pos-btn-long.active  { background:var(--green);color:#000; }
+    .pos-btn-short { border-color:var(--red);color:var(--red); }
+    .pos-btn-short:hover { background:rgba(255,71,87,.15); }
+    .pos-btn-short.active { background:var(--red);color:#fff; }
+
+    /* ── Position panel ── */
+    .pos-panel { display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 22px;margin-bottom:14px;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between; }
+    .pos-panel.open { display:flex; }
+    .pos-panel.long-open  { border-color:var(--green); }
+    .pos-panel.short-open { border-color:var(--red); }
+    .pos-type { font-size:18px;font-weight:800;letter-spacing:.4px;margin-bottom:4px; }
+    .pos-meta { font-size:12px;color:var(--muted); }
+    .pos-stats { display:flex;gap:24px;flex-wrap:wrap; }
+    .pos-stat-lbl { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;display:block;margin-bottom:3px; }
+    .pos-stat-val { font-size:16px;font-weight:700; }
+    .pos-holding { font-size:13px;color:var(--muted);font-weight:600; }
+    .pos-holding.alert {
+      font-size:18px;font-weight:900;color:#fff;
+      background:var(--red);padding:10px 22px;border-radius:8px;
+      animation:flash 0.8s ease-in-out infinite;
+      letter-spacing:.5px;
+    }
+    .pos-holding.alert.long-close { background:var(--green);color:#000; }
+    @keyframes flash { 0%,100%{opacity:1} 50%{opacity:.6} }
+    .pos-cancel { background:transparent;border:1px solid var(--border);color:var(--muted);padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:all .2s; }
+    .pos-cancel:hover { border-color:var(--red);color:var(--red); }
   </style>
 </head>
 <body>
@@ -160,9 +192,6 @@
   <div class="ms-card"><div class="ms-title">ADX · Trend Strength</div><div class="ms-value" id="ms-adx">—</div><div class="ms-sub" id="ms-adx-sub">—</div></div>
 </div>
 
-<!-- indicators -->
-<div class="ind-grid" id="ind-grid"></div>
-
 <!-- chart -->
 <div class="tf-row" id="tf-row">
   <button class="tf-btn" data-tv="1">1m</button>
@@ -173,6 +202,33 @@
   <button class="tf-btn" data-tv="D">1D</button>
 </div>
 <div class="chart-wrap"><div id="tv-chart"></div></div>
+
+<!-- position buttons -->
+<div class="pos-btns">
+  <button class="pos-btn pos-btn-long" id="btn-long" onclick="openPosition('long')">▲ Purchased Long</button>
+  <button class="pos-btn pos-btn-short" id="btn-short" onclick="openPosition('short')">▼ Purchased Short</button>
+</div>
+
+<!-- position panel -->
+<div class="pos-panel" id="pos-panel">
+  <div>
+    <div class="pos-type" id="pos-type">—</div>
+    <div class="pos-meta" id="pos-meta">—</div>
+  </div>
+  <div class="pos-stats">
+    <div><span class="pos-stat-lbl">Entry</span><span class="pos-stat-val" id="pos-entry">—</span></div>
+    <div><span class="pos-stat-lbl">Current</span><span class="pos-stat-val" id="pos-current">—</span></div>
+    <div><span class="pos-stat-lbl">P&L</span><span class="pos-stat-val" id="pos-pnl">—</span></div>
+    <div><span class="pos-stat-lbl">Duration</span><span class="pos-stat-val" id="pos-dur">—</span></div>
+  </div>
+  <div id="pos-close-wrap">
+    <div class="pos-holding" id="pos-holding">● Holding…</div>
+  </div>
+  <button class="pos-cancel" onclick="closePosition()">✕ Cancel</button>
+</div>
+
+<!-- indicators -->
+<div class="ind-grid" id="ind-grid"></div>
 
 <div class="footer">Data: Binance REST API (200×15m + 120×1m candles) · Chart: TradingView · Auto-refresh every 5s · Not financial advice</div>
 
@@ -937,15 +993,92 @@ async function refresh() {
 
     const result = computeSignal(d);
 
+    lastPrice = price;
+    lastScore = result.score;
+
     updatePriceStrip(d);
     updateSignal(result);
     updateMS({...d, ...{reasons:result.reasons}});
     updateIndicators(d, result);
+    renderPosition(price, result.score);
 
     document.getElementById('refresh-txt').textContent=`Live · ${new Date().toLocaleTimeString()}`;
   } catch(err) {
     console.error(err);
     document.getElementById('refresh-txt').textContent='Error — retrying…';
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   POSITION TRACKER
+═══════════════════════════════════════════════════ */
+let position = null; // { type:'long'|'short', entryPrice, entryTime }
+let lastPrice = null;
+let lastScore = 0;
+
+const fmt2 = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+function openPosition(type) {
+  if (!lastPrice) return;
+  position = { type, entryPrice: lastPrice, entryTime: new Date() };
+  document.getElementById('btn-long').classList.toggle('active', type==='long');
+  document.getElementById('btn-short').classList.toggle('active', type==='short');
+  renderPosition(lastPrice, lastScore);
+}
+
+function closePosition() {
+  position = null;
+  document.getElementById('btn-long').classList.remove('active');
+  document.getElementById('btn-short').classList.remove('active');
+  const panel = document.getElementById('pos-panel');
+  panel.className = 'pos-panel';
+}
+
+function shouldClose(score) {
+  if (!position) return false;
+  // Long: close if signal flips bearish OR score drops below -0.12
+  if (position.type === 'long')  return score < -0.12;
+  // Short: close if signal flips bullish OR score rises above +0.12
+  if (position.type === 'short') return score > 0.12;
+  return false;
+}
+
+function elapsed(from) {
+  const s = Math.floor((Date.now() - from) / 1000);
+  if (s < 60)  return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+
+function renderPosition(price, score) {
+  if (!position) return;
+  const panel = document.getElementById('pos-panel');
+  panel.className = `pos-panel open ${position.type}-open`;
+
+  const isLong = position.type === 'long';
+  const raw = isLong
+    ? (price - position.entryPrice) / position.entryPrice * 100
+    : (position.entryPrice - price) / position.entryPrice * 100;
+  const pnlColor = raw >= 0 ? 'var(--green)' : 'var(--red)';
+
+  document.getElementById('pos-type').innerHTML =
+    `<span style="color:${isLong?'var(--green)':'var(--red)'}">${isLong?'▲ LONG':'▼ SHORT'}</span>`;
+  document.getElementById('pos-meta').textContent =
+    `Opened ${position.entryTime.toLocaleTimeString()}`;
+  document.getElementById('pos-entry').textContent   = fmt2(position.entryPrice);
+  document.getElementById('pos-current').textContent = fmt2(price);
+  document.getElementById('pos-dur').textContent     = elapsed(position.entryTime);
+  document.getElementById('pos-pnl').innerHTML =
+    `<span style="color:${pnlColor}">${raw>=0?'+':''}${raw.toFixed(3)}%</span>`;
+
+  const closeEl = document.getElementById('pos-holding');
+  const close = shouldClose(score);
+  if (close) {
+    closeEl.className = `pos-holding alert${isLong?' long-close':''}`;
+    closeEl.textContent = isLong ? '⚠ CLOSE LONG — GO SHORT' : '⚠ CLOSE SHORT — GO LONG';
+  } else {
+    closeEl.className = 'pos-holding';
+    closeEl.textContent = '● Holding…';
   }
 }
 
