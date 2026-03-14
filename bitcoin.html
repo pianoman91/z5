@@ -123,6 +123,9 @@
     .pos-stats { display:flex;gap:24px;flex-wrap:wrap; }
     .pos-stat-lbl { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;display:block;margin-bottom:3px; }
     .pos-stat-val { font-size:16px;font-weight:700; }
+    .pos-tp-val { color:var(--green); }
+    .pos-sl-val { color:var(--red); }
+    .pos-cd-val { color:var(--accent); }
     .pos-holding { font-size:13px;color:var(--muted);font-weight:600; }
     .pos-holding.alert {
       font-size:18px;font-weight:900;color:#fff;
@@ -218,8 +221,11 @@
   <div class="pos-stats">
     <div><span class="pos-stat-lbl">Entry</span><span class="pos-stat-val" id="pos-entry">—</span></div>
     <div><span class="pos-stat-lbl">Current</span><span class="pos-stat-val" id="pos-current">—</span></div>
-    <div><span class="pos-stat-lbl">P&L</span><span class="pos-stat-val" id="pos-pnl">—</span></div>
+    <div><span class="pos-stat-lbl">P&amp;L</span><span class="pos-stat-val" id="pos-pnl">—</span></div>
     <div><span class="pos-stat-lbl">Duration</span><span class="pos-stat-val" id="pos-dur">—</span></div>
+    <div><span class="pos-stat-lbl">Take Profit</span><span class="pos-stat-val pos-tp-val" id="pos-tp">—</span></div>
+    <div><span class="pos-stat-lbl">Stop Loss</span><span class="pos-stat-val pos-sl-val" id="pos-sl">—</span></div>
+    <div><span class="pos-stat-lbl">Hold for ~</span><span class="pos-stat-val pos-cd-val" id="pos-countdown">—</span></div>
   </div>
   <div id="pos-close-wrap">
     <div class="pos-holding" id="pos-holding">● Holding…</div>
@@ -993,8 +999,10 @@ async function refresh() {
 
     const result = computeSignal(d);
 
-    lastPrice = price;
-    lastScore = result.score;
+    lastPrice  = price;
+    lastScore  = result.score;
+    lastATR    = d.atrVal;
+    lastSRData = d.srData;
 
     updatePriceStrip(d);
     updateSignal(result);
@@ -1012,42 +1020,99 @@ async function refresh() {
 /* ═══════════════════════════════════════════════════
    POSITION TRACKER
 ═══════════════════════════════════════════════════ */
-let position = null; // { type:'long'|'short', entryPrice, entryTime }
-let lastPrice = null;
-let lastScore = 0;
+let position    = null; // { type, entryPrice, entryTime, tp, sl, countdownEnd }
+let lastPrice   = null;
+let lastScore   = 0;
+let lastATR     = null;
+let lastSRData  = null;
+let countdownTimer = null;
 
-const fmt2 = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt2 = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+const fmt2d = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+/* Estimate how many seconds to reach distanceDollars at current volatility.
+   Uses ATR as "typical move per 15-min candle". */
+function estimateSecs(distanceDollars) {
+  if (!lastATR || lastATR === 0) return null;
+  const minutesPerCandle = 15;
+  const dollarsPerMinute = lastATR / minutesPerCandle;
+  return Math.round((distanceDollars / dollarsPerMinute) * 60); // convert minutes→seconds
+}
+
+function computeTPSL(type, entry) {
+  const atr = lastATR || entry * 0.01; // fallback 1%
+  const sr  = lastSRData;
+  let tp, sl;
+
+  if (type === 'long') {
+    // TP = nearest resistance above entry (if within 3 ATR), else entry + 2*ATR
+    const res = sr?.res?.price;
+    tp = (res && res > entry && res - entry < atr * 3) ? res : entry + 2 * atr;
+    // SL = nearest support below entry (if within 2 ATR), else entry - 1.2*ATR
+    const sup = sr?.sup?.price;
+    sl = (sup && sup < entry && entry - sup < atr * 2) ? sup : entry - 1.2 * atr;
+  } else {
+    // TP = nearest support below entry (if within 3 ATR), else entry - 2*ATR
+    const sup = sr?.sup?.price;
+    tp = (sup && sup < entry && entry - sup < atr * 3) ? sup : entry - 2 * atr;
+    // SL = nearest resistance above entry (if within 2 ATR), else entry + 1.2*ATR
+    const res = sr?.res?.price;
+    sl = (res && res > entry && res - entry < atr * 2) ? res : entry + 1.2 * atr;
+  }
+  return { tp, sl };
+}
 
 function openPosition(type) {
   if (!lastPrice) return;
-  position = { type, entryPrice: lastPrice, entryTime: new Date() };
+  const { tp, sl } = computeTPSL(type, lastPrice);
+  const distToTP   = Math.abs(tp - lastPrice);
+  const estSecs    = estimateSecs(distToTP);
+  const countdownEnd = estSecs ? Date.now() + estSecs * 1000 : null;
+
+  position = { type, entryPrice: lastPrice, entryTime: new Date(), tp, sl, countdownEnd };
+
   document.getElementById('btn-long').classList.toggle('active', type==='long');
   document.getElementById('btn-short').classList.toggle('active', type==='short');
+
+  // start per-second countdown tick
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdownTimer = setInterval(tickCountdown, 1000);
+
   renderPosition(lastPrice, lastScore);
 }
 
 function closePosition() {
   position = null;
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
   document.getElementById('btn-long').classList.remove('active');
   document.getElementById('btn-short').classList.remove('active');
   const panel = document.getElementById('pos-panel');
   panel.className = 'pos-panel';
 }
 
+function tickCountdown() {
+  if (!position) return;
+  const cdEl = document.getElementById('pos-countdown');
+  if (!cdEl) return;
+  const secsLeft = position.countdownEnd ? Math.max(0, Math.round((position.countdownEnd - Date.now()) / 1000)) : null;
+  cdEl.textContent = secsLeft === null ? '—' : secsLeft <= 0 ? 'Due now!' : fmtDuration(secsLeft);
+}
+
+function fmtDuration(s) {
+  if (s < 60)   return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+
 function shouldClose(score) {
   if (!position) return false;
-  // Long: close if signal flips bearish OR score drops below -0.12
   if (position.type === 'long')  return score < -0.12;
-  // Short: close if signal flips bullish OR score rises above +0.12
   if (position.type === 'short') return score > 0.12;
   return false;
 }
 
 function elapsed(from) {
-  const s = Math.floor((Date.now() - from) / 1000);
-  if (s < 60)  return `${s}s`;
-  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
-  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+  return fmtDuration(Math.floor((Date.now() - from) / 1000));
 }
 
 function renderPosition(price, score) {
@@ -1063,14 +1128,21 @@ function renderPosition(price, score) {
 
   document.getElementById('pos-type').innerHTML =
     `<span style="color:${isLong?'var(--green)':'var(--red)'}">${isLong?'▲ LONG':'▼ SHORT'}</span>`;
-  document.getElementById('pos-meta').textContent =
-    `Opened ${position.entryTime.toLocaleTimeString()}`;
-  document.getElementById('pos-entry').textContent   = fmt2(position.entryPrice);
-  document.getElementById('pos-current').textContent = fmt2(price);
+  document.getElementById('pos-meta').textContent = `Opened ${position.entryTime.toLocaleTimeString()}`;
+  document.getElementById('pos-entry').textContent   = fmt2d(position.entryPrice);
+  document.getElementById('pos-current').textContent = fmt2d(price);
   document.getElementById('pos-dur').textContent     = elapsed(position.entryTime);
   document.getElementById('pos-pnl').innerHTML =
     `<span style="color:${pnlColor}">${raw>=0?'+':''}${raw.toFixed(3)}%</span>`;
 
+  // TP / SL
+  document.getElementById('pos-tp').textContent = fmt2(position.tp);
+  document.getElementById('pos-sl').textContent = fmt2(position.sl);
+
+  // countdown (initial render; per-second ticking done by tickCountdown)
+  tickCountdown();
+
+  // close alert
   const closeEl = document.getElementById('pos-holding');
   const close = shouldClose(score);
   if (close) {
