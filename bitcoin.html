@@ -103,6 +103,21 @@
     .spinner { display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle; }
     @keyframes spin { to{transform:rotate(360deg)} }
 
+    /* ── Paper trade panel ── */
+    .paper-panel { background:var(--surface);border:1px solid #f59e0b55;border-radius:var(--r);padding:16px 22px;margin-bottom:14px; }
+    .paper-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:12px; }
+    .paper-title { font-size:14px;font-weight:800;color:#f59e0b;letter-spacing:.4px; }
+    .paper-stats { display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px; }
+    .paper-history { display:flex;flex-direction:column;gap:5px;max-height:220px;overflow-y:auto; }
+    .ph-row { display:flex;gap:10px;align-items:center;font-size:12px;background:var(--bg);border-radius:6px;padding:6px 10px; }
+    .ph-badge { font-weight:800;font-size:11px;padding:2px 7px;border-radius:4px;min-width:44px;text-align:center; }
+    .ph-badge.long  { background:rgba(0,201,122,.2);color:var(--green); }
+    .ph-badge.short { background:rgba(255,71,87,.2);color:var(--red); }
+    .ph-pnl { font-weight:700;margin-left:auto; }
+    .ph-pnl.win  { color:var(--green); }
+    .ph-pnl.loss { color:var(--red); }
+    .ph-meta { color:var(--muted); }
+
     /* ── Position buttons ── */
     .pos-btns { display:flex;gap:12px;margin-top:14px;margin-bottom:12px;flex-wrap:wrap; }
     .pos-btn { padding:11px 26px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;border:2px solid transparent;background:var(--surface);transition:all .2s;letter-spacing:.3px; }
@@ -112,6 +127,9 @@
     .pos-btn-short { border-color:var(--red);color:var(--red); }
     .pos-btn-short:hover { background:rgba(255,71,87,.15); }
     .pos-btn-short.active { background:var(--red);color:#fff; }
+    .pos-btn-paper { border-color:#f59e0b;color:#f59e0b; }
+    .pos-btn-paper:hover { background:rgba(245,158,11,.15); }
+    .pos-btn-paper.active { background:#f59e0b;color:#000; }
 
     /* ── Position panel ── */
     .pos-panel { display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 22px;margin-bottom:14px;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between; }
@@ -210,6 +228,7 @@
 <div class="pos-btns">
   <button class="pos-btn pos-btn-long" id="btn-long" onclick="openPosition('long')">▲ Purchased Long</button>
   <button class="pos-btn pos-btn-short" id="btn-short" onclick="openPosition('short')">▼ Purchased Short</button>
+  <button class="pos-btn pos-btn-paper" id="btn-paper" onclick="togglePaper()">◎ Paper Trade: OFF</button>
 </div>
 
 <!-- position panel -->
@@ -231,6 +250,23 @@
     <div class="pos-holding" id="pos-holding">● Holding…</div>
   </div>
   <button class="pos-cancel" onclick="closePosition()">✕ Cancel</button>
+</div>
+
+<!-- paper trade stats -->
+<div class="paper-panel" id="paper-panel" style="display:none">
+  <div class="paper-header">
+    <span class="paper-title">◎ Paper Trading</span>
+    <button class="pos-cancel" onclick="resetPaper()">↺ Reset</button>
+  </div>
+  <div class="paper-stats">
+    <div><span class="pos-stat-lbl">Balance</span><span class="pos-stat-val" id="pp-balance">—</span></div>
+    <div><span class="pos-stat-lbl">Total P&amp;L</span><span class="pos-stat-val" id="pp-pnl">—</span></div>
+    <div><span class="pos-stat-lbl">Trades</span><span class="pos-stat-val" id="pp-trades">0</span></div>
+    <div><span class="pos-stat-lbl">Win Rate</span><span class="pos-stat-val" id="pp-winrate">—</span></div>
+    <div><span class="pos-stat-lbl">Best</span><span class="pos-stat-val pos-tp-val" id="pp-best">—</span></div>
+    <div><span class="pos-stat-lbl">Worst</span><span class="pos-stat-val pos-sl-val" id="pp-worst">—</span></div>
+  </div>
+  <div class="paper-history" id="pp-history"></div>
 </div>
 
 <!-- indicators -->
@@ -1082,6 +1118,7 @@ function openPosition(type) {
 }
 
 function closePosition() {
+  if (position && lastPrice) settlePaperTrade(lastPrice);
   position = null;
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
   document.getElementById('btn-long').classList.remove('active');
@@ -1152,6 +1189,81 @@ function renderPosition(price, score) {
     closeEl.className = 'pos-holding';
     closeEl.textContent = '● Holding…';
   }
+}
+
+/* ═══════════════════════════════════════════════════
+   PAPER TRADING
+═══════════════════════════════════════════════════ */
+const PAPER_START = 10_000;
+let paperMode   = false;
+let paperBal    = PAPER_START;
+let paperTrades = []; // { type, entry, exit, pnl, pnlPct, time }
+
+function togglePaper() {
+  paperMode = !paperMode;
+  const btn = document.getElementById('btn-paper');
+  btn.classList.toggle('active', paperMode);
+  btn.textContent = paperMode ? '◎ Paper Trade: ON' : '◎ Paper Trade: OFF';
+  document.getElementById('paper-panel').style.display = paperMode ? '' : 'none';
+  if (paperMode) renderPaperStats();
+}
+
+function resetPaper() {
+  // close any open paper position first
+  if (position) closePosition();
+  paperBal    = PAPER_START;
+  paperTrades = [];
+  renderPaperStats();
+}
+
+/* Called by closePosition() when paper mode is active */
+function settlePaperTrade(exitPrice) {
+  if (!position || !paperMode) return;
+  const isLong = position.type === 'long';
+  const pnlPct = isLong
+    ? (exitPrice - position.entryPrice) / position.entryPrice
+    : (position.entryPrice - exitPrice) / position.entryPrice;
+  const pnl = paperBal * 0.1 * pnlPct;  // trade with 10% of balance each time
+  paperBal += pnl;
+  paperTrades.unshift({
+    type: position.type,
+    entry: position.entryPrice,
+    exit: exitPrice,
+    pnl,
+    pnlPct,
+    time: new Date()
+  });
+  if (paperTrades.length > 50) paperTrades.pop();
+  renderPaperStats();
+}
+
+function renderPaperStats() {
+  const totalPnl = paperBal - PAPER_START;
+  const wins     = paperTrades.filter(t => t.pnl > 0).length;
+  const winRate  = paperTrades.length ? Math.round(wins / paperTrades.length * 100) : null;
+  const best     = paperTrades.length ? Math.max(...paperTrades.map(t=>t.pnlPct)) : null;
+  const worst    = paperTrades.length ? Math.min(...paperTrades.map(t=>t.pnlPct)) : null;
+
+  const pnlColor = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  document.getElementById('pp-balance').innerHTML =
+    `<span>$${paperBal.toLocaleString('en-US',{maximumFractionDigits:0})}</span>`;
+  document.getElementById('pp-pnl').innerHTML =
+    `<span style="color:${pnlColor}">${totalPnl>=0?'+':''}$${totalPnl.toLocaleString('en-US',{maximumFractionDigits:0})}</span>`;
+  document.getElementById('pp-trades').textContent  = paperTrades.length;
+  document.getElementById('pp-winrate').innerHTML   = winRate !== null
+    ? `<span style="color:${winRate>=50?'var(--green)':'var(--red)'}">${winRate}%</span>` : '—';
+  document.getElementById('pp-best').textContent    = best  !== null ? `+${(best*100).toFixed(2)}%`  : '—';
+  document.getElementById('pp-worst').textContent   = worst !== null ? `${(worst*100).toFixed(2)}%` : '—';
+
+  document.getElementById('pp-history').innerHTML = paperTrades.slice(0,10).map(t => {
+    const win = t.pnl > 0;
+    return `<div class="ph-row">
+      <span class="ph-badge ${t.type}">${t.type.toUpperCase()}</span>
+      <span class="ph-meta">${fmt2d(t.entry)} → ${fmt2d(t.exit)}</span>
+      <span class="ph-pnl ${win?'win':'loss'}">${win?'+':''}$${t.pnl.toFixed(0)} (${win?'+':''}${(t.pnlPct*100).toFixed(2)}%)</span>
+      <span class="ph-meta">${t.time.toLocaleTimeString()}</span>
+    </div>`;
+  }).join('');
 }
 
 refresh();
