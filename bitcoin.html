@@ -118,6 +118,28 @@
     .ph-pnl.loss { color:var(--red); }
     .ph-meta { color:var(--muted); }
 
+    /* ── Liquidation Radar ── */
+    .liq-panel { background:var(--surface);border:1px solid #a855f755;border-radius:var(--r);padding:16px 22px;margin-bottom:14px; }
+    .liq-header { display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px; }
+    .liq-title  { font-size:14px;font-weight:800;color:#a855f7; }
+    .liq-sub    { font-size:11px;font-weight:400;color:var(--muted); }
+    .liq-ts     { font-size:11px;color:var(--muted); }
+    .liq-stats  { display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px; }
+    .liq-zones-wrap { margin-bottom:14px; }
+    .liq-zone-title  { font-size:11px;color:var(--muted);margin-bottom:7px; }
+    .liq-recent-title { font-size:11px;color:var(--muted);margin-bottom:7px; }
+    .liq-zones  { display:grid;grid-template-columns:1fr 28px 1fr;gap:4px 6px;align-items:center; }
+    .lz-label   { font-size:11px;color:var(--muted); }
+    .lz-bar-wrap{ position:relative;height:18px;border-radius:4px;overflow:hidden; }
+    .lz-bar     { position:absolute;top:0;height:100%;border-radius:4px; }
+    .lz-bar.long-bar  { background:rgba(0,201,122,.25);right:0; }
+    .lz-bar.short-bar { background:rgba(255,71,87,.25);left:0; }
+    .lz-price   { font-size:11px;font-weight:700;text-align:center;white-space:nowrap; }
+    .lz-price.long  { color:var(--green); }
+    .lz-price.short { color:var(--red); }
+    .lz-lev     { font-size:11px;color:var(--muted);text-align:center;font-weight:700; }
+    .liq-recent { display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto; }
+
     /* ── Position buttons ── */
     .pos-btns { display:flex;gap:12px;margin-top:14px;margin-bottom:12px;flex-wrap:wrap; }
     .pos-btn { padding:11px 26px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;border:2px solid transparent;background:var(--surface);transition:all .2s;letter-spacing:.3px; }
@@ -253,8 +275,7 @@
 </div>
 
 <!-- paper trade stats -->
-<div class="paper-panel" id="paper-panel" style="display:none">
-  <div class="paper-header">
+<div class="paper-panel" id="paper-panel" style="display:none">  <div class="paper-header">
     <span class="paper-title">◎ Paper Trading</span>
     <button class="pos-cancel" onclick="resetPaper()">↺ Reset</button>
   </div>
@@ -267,6 +288,28 @@
     <div><span class="pos-stat-lbl">Worst</span><span class="pos-stat-val pos-sl-val" id="pp-worst">—</span></div>
   </div>
   <div class="paper-history" id="pp-history"></div>
+</div>
+
+<!-- liquidation radar -->
+<div class="liq-panel" id="liq-panel">
+  <div class="liq-header">
+    <span class="liq-title">⚡ Liquidation Radar <span class="liq-sub">· Est. liq zones + last 1h force orders (Binance Futures)</span></span>
+    <span class="liq-ts" id="liq-ts"></span>
+  </div>
+  <div class="liq-stats" id="liq-stats">
+    <div><span class="pos-stat-lbl">Long Liq (1h)</span><span class="pos-stat-val pos-sl-val" id="liq-long">—</span></div>
+    <div><span class="pos-stat-lbl">Short Liq (1h)</span><span class="pos-stat-val pos-tp-val" id="liq-short">—</span></div>
+    <div><span class="pos-stat-lbl">Dominant</span><span class="pos-stat-val" id="liq-dom">—</span></div>
+    <div><span class="pos-stat-lbl">Total (1h)</span><span class="pos-stat-val" id="liq-total">—</span></div>
+  </div>
+  <!-- estimated liquidation zones -->
+  <div class="liq-zones-wrap">
+    <div class="liq-zone-title">Estimated Liq Zones — positions opened near current price</div>
+    <div class="liq-zones" id="liq-zones"></div>
+  </div>
+  <!-- recent notable liquidations -->
+  <div class="liq-recent-title">Recent Largest Liquidations</div>
+  <div class="liq-recent" id="liq-recent"><span class="ph-meta">Loading…</span></div>
 </div>
 
 <!-- indicators -->
@@ -973,8 +1016,9 @@ async function fetchKlines(interval='15m', limit=200) {
 async function refresh() {
   document.getElementById('refresh-txt').innerHTML='<span class="spinner"></span> Updating…';
   try {
-    const [ticker, candles, c1m] = await Promise.all([
-      fetchTicker(), fetchKlines('15m',200), fetchKlines('1m',120)
+    const [ticker, candles, c1m, liqs] = await Promise.all([
+      fetchTicker(), fetchKlines('15m',200), fetchKlines('1m',120),
+      fetchLiquidations().catch(()=>[])
     ]);
 
     const price     = +ticker.lastPrice;
@@ -1045,6 +1089,7 @@ async function refresh() {
     updateMS({...d, ...{reasons:result.reasons}});
     updateIndicators(d, result);
     renderPosition(price, result.score);
+    updateLiqRadar(price, liqs);
 
     document.getElementById('refresh-txt').textContent=`Live · ${new Date().toLocaleTimeString()}`;
   } catch(err) {
@@ -1189,6 +1234,94 @@ function renderPosition(price, score) {
     closeEl.className = 'pos-holding';
     closeEl.textContent = '● Holding…';
   }
+}
+
+/* ═══════════════════════════════════════════════════
+   LIQUIDATION RADAR
+═══════════════════════════════════════════════════ */
+async function fetchLiquidations() {
+  const url = 'https://fapi.binance.com/fapi/v1/allForceOrders?symbol=BTCUSDT&limit=200';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('liq fetch failed');
+  return res.json();
+}
+
+function fmtM(v) {
+  if (v >= 1e6)  return `$${(v/1e6).toFixed(2)}M`;
+  if (v >= 1e3)  return `$${(v/1e3).toFixed(0)}K`;
+  return `$${v.toFixed(0)}`;
+}
+
+function updateLiqRadar(price, liqs) {
+  // ── 1h window ──
+  const cutoff = Date.now() - 3_600_000;
+  const hour   = liqs.filter(l => l.time > cutoff);
+
+  // BUY = shorts got liquidated, SELL = longs got liquidated
+  const longLiq  = hour.filter(l => l.side === 'SELL');
+  const shortLiq = hour.filter(l => l.side === 'BUY');
+  const sumUsd = arr => arr.reduce((s,l) => s + +l.averagePrice * +l.origQty, 0);
+
+  const longAmt  = sumUsd(longLiq);
+  const shortAmt = sumUsd(shortLiq);
+  const total    = longAmt + shortAmt;
+  const dom      = total === 0 ? '—' : longAmt > shortAmt ? '🔴 Longs' : '🟢 Shorts';
+
+  document.getElementById('liq-long').textContent  = total ? fmtM(longAmt)  : '—';
+  document.getElementById('liq-short').textContent = total ? fmtM(shortAmt) : '—';
+  document.getElementById('liq-dom').textContent   = dom;
+  document.getElementById('liq-total').textContent = total ? fmtM(total)    : '—';
+  document.getElementById('liq-ts').textContent    = `Updated ${new Date().toLocaleTimeString()}`;
+
+  // ── Estimated liq zones ──
+  const leverages = [
+    {lev:100, pct:0.01}, {lev:50, pct:0.02},
+    {lev:25,  pct:0.04}, {lev:10, pct:0.10},
+    {lev:5,   pct:0.20},
+  ];
+  const maxPct = 0.20;
+  const zonesEl = document.getElementById('liq-zones');
+  // header row
+  let html = `
+    <div class="lz-label" style="text-align:right">Longs liq'd if price ▼</div>
+    <div class="lz-lev">Lev</div>
+    <div class="lz-label">Shorts liq'd if price ▲</div>`;
+  for (const {lev, pct} of leverages) {
+    const longLiqPrice  = price * (1 - pct);
+    const shortLiqPrice = price * (1 + pct);
+    const barW = Math.round((pct / maxPct) * 100);
+    html += `
+      <div class="lz-bar-wrap"><div class="lz-bar long-bar" style="width:${barW}%"></div></div>
+      <div class="lz-lev">${lev}×</div>
+      <div class="lz-bar-wrap"><div class="lz-bar short-bar" style="width:${barW}%"></div></div>
+      <div class="lz-price long" style="text-align:right">${fmt2d(longLiqPrice)} <span style="color:var(--muted);font-weight:400">(−${(pct*100).toFixed(0)}%)</span></div>
+      <div></div>
+      <div class="lz-price short">${fmt2d(shortLiqPrice)} <span style="color:var(--muted);font-weight:400">(+${(pct*100).toFixed(0)}%)</span></div>`;
+  }
+  zonesEl.innerHTML = html;
+
+  // ── Recent notable liquidations (top 8 by USD size) ──
+  const top8 = [...liqs]
+    .map(l => ({...l, usd: +l.averagePrice * +l.origQty}))
+    .sort((a,b) => b.usd - a.usd)
+    .slice(0, 8);
+
+  const recentEl = document.getElementById('liq-recent');
+  if (!top8.length) { recentEl.innerHTML = '<span class="ph-meta">No recent data</span>'; return; }
+
+  recentEl.innerHTML = top8.map(l => {
+    const isLong  = l.side === 'SELL'; // SELL = long was liq'd
+    const typeStr = isLong ? 'LONG' : 'SHORT';
+    const cls     = isLong ? 'long' : 'short';
+    const minsAgo = Math.round((Date.now() - l.time) / 60000);
+    return `<div class="ph-row">
+      <span class="ph-badge ${cls}">${typeStr} LIQ</span>
+      <span class="ph-meta">@ ${fmt2d(+l.averagePrice)}</span>
+      <span class="ph-meta">${(+l.origQty).toFixed(3)} BTC</span>
+      <span class="ph-pnl ${isLong?'loss':'win'}" style="margin-left:auto">${fmtM(l.usd)}</span>
+      <span class="ph-meta">${minsAgo}m ago</span>
+    </div>`;
+  }).join('');
 }
 
 /* ═══════════════════════════════════════════════════
