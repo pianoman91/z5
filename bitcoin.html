@@ -774,13 +774,29 @@ function computeSignal(d) {
   else                  { signal='HOLD';  confidence=Math.round(60-abs*80); }
   confidence = Math.max(51, Math.min(98, confidence));
 
+  // ── Commission viability check ──
+  // Estimated TP move: 2×ATR from entry. Must exceed round-trip taker fee to be worth trading.
+  // Require TP % ≥ 3× round-trip fee to give meaningful edge above breakeven.
+  let feeNote = null;
+  if (signal !== 'HOLD' && atrVal && price) {
+    const tpPct = (atrVal * 2) / price;         // estimated TP distance as % of price
+    const minEdge = FEE_RT * 3;                  // need at least 3× round-trip to have real edge
+    if (tpPct < FEE_RT) {
+      signal = 'HOLD';
+      feeNote = `Volatility too low — est. move ${(tpPct*100).toFixed(3)}% < fee cost ${(FEE_RT*100).toFixed(3)}%`;
+    } else if (tpPct < minEdge) {
+      confidence = Math.max(51, Math.round(confidence * (tpPct / minEdge)));
+      feeNote = `Low edge after fees — est. move ${(tpPct*100).toFixed(2)}% vs ${(FEE_RT*100).toFixed(3)}% round-trip cost`;
+    }
+  }
+
   // Build summary
   const topFactors = factors.filter(f=>Math.abs(f.score)>0.3)
     .sort((a,b)=>Math.abs(b.score*b.weight)-Math.abs(a.score*a.weight))
     .slice(0,3);
   const summary = topFactors.map(f=>`${f.score>0?'▲':'▼'} ${f.name}`).join(' · ');
 
-  return {signal, confidence, score, reasons, factors, bull, bear, neut, summary, adxMult};
+  return {signal, confidence, score, reasons, factors, bull, bear, neut, summary, adxMult, feeNote};
 }
 
 /* ═══════════════════════════════════════════════════
@@ -808,7 +824,7 @@ function updatePriceStrip({price,change24h,high24h,low24h,volume24h}) {
 }
 
 function updateSignal(result) {
-  const {signal,confidence,bull,bear,neut,summary} = result;
+  const {signal,confidence,bull,bear,neut,summary,feeNote} = result;
   const pill=document.getElementById('signal-pill');
   pill.className=`signal-pill ${signal}`;
   const icons={LONG:'▲ GO LONG',SHORT:'▼ GO SHORT',HOLD:'⏸ HOLD'};
@@ -818,7 +834,10 @@ function updateSignal(result) {
   const bar=document.getElementById('conf-bar');
   bar.style.width=confidence+'%'; bar.className=`conf-bar-fill ${signal}`;
   setEl('tally', `<span class="tally-pill tally-bull">▲ ${bull} Bullish</span><span class="tally-pill tally-bear">▼ ${bear} Bearish</span><span class="tally-pill tally-neut">— ${neut} Neutral</span>`);
-  setEl('sig-summary', summary||'Waiting for data…');
+  const summaryText = feeNote
+    ? `${summary||'—'} · ⚠ ${feeNote}`
+    : (summary||'Waiting for data…');
+  setEl('sig-summary', summaryText);
 }
 
 function updateMS(d) {
@@ -1111,6 +1130,11 @@ let countdownTimer = null;
 const fmt2 = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
 const fmt2d = n => '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 
+/* Trading fee constants (Binance Futures) */
+const FEE_TAKER = 0.00055; // 0.055%
+const FEE_MAKER = 0.0002;  // 0.020%
+const FEE_RT    = FEE_TAKER * 2; // worst-case round-trip: 0.11%
+
 /* Estimate how many seconds to reach distanceDollars at current volatility.
    Uses ATR as "typical move per 15-min candle". */
 function estimateSecs(distanceDollars) {
@@ -1208,20 +1232,40 @@ function renderPosition(price, score) {
     : (position.entryPrice - price) / position.entryPrice * 100;
   const pnlColor = raw >= 0 ? 'var(--green)' : 'var(--red)';
 
+  // ── Recompute TP/SL with latest ATR + SR data every refresh ──
+  const updated = computeTPSL(position.type, position.entryPrice);
+  position.tp = updated.tp;
+  position.sl = updated.sl;
+
+  // ── Recompute countdown based on current price → TP distance + current ATR ──
+  const distToTP  = Math.abs(position.tp - price);
+  const freshSecs = estimateSecs(distToTP);
+  if (freshSecs !== null) {
+    position.countdownEnd = Date.now() + freshSecs * 1000;
+  }
+
+  // ── Break-even price (entry ± round-trip taker fee) ──
+  const be = isLong
+    ? position.entryPrice * (1 + FEE_RT)
+    : position.entryPrice * (1 - FEE_RT);
+  const beCleared = isLong ? price > be : price < be;
+  const beColor = beCleared ? 'var(--green)' : 'var(--muted)';
+
   document.getElementById('pos-type').innerHTML =
     `<span style="color:${isLong?'var(--green)':'var(--red)'}">${isLong?'▲ LONG':'▼ SHORT'}</span>`;
-  document.getElementById('pos-meta').textContent = `Opened ${position.entryTime.toLocaleTimeString()}`;
+  document.getElementById('pos-meta').innerHTML =
+    `Opened ${position.entryTime.toLocaleTimeString()} · Break-even: <span style="color:${beColor}">${fmt2d(be)}${beCleared?' ✓':''}</span>`;
   document.getElementById('pos-entry').textContent   = fmt2d(position.entryPrice);
   document.getElementById('pos-current').textContent = fmt2d(price);
   document.getElementById('pos-dur').textContent     = elapsed(position.entryTime);
   document.getElementById('pos-pnl').innerHTML =
     `<span style="color:${pnlColor}">${raw>=0?'+':''}${raw.toFixed(3)}%</span>`;
 
-  // TP / SL
+  // TP / SL (freshly recomputed)
   document.getElementById('pos-tp').textContent = fmt2(position.tp);
   document.getElementById('pos-sl').textContent = fmt2(position.sl);
 
-  // countdown (initial render; per-second ticking done by tickCountdown)
+  // countdown (recomputed above; per-second ticking done by tickCountdown)
   tickCountdown();
 
   // close alert
