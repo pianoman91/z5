@@ -526,12 +526,25 @@ function candlePattern(candles) {
 /* ═══════════════════════════════════════════════════
    SIGNAL ENGINE — weighted multi-factor
 ═══════════════════════════════════════════════════ */
+/* ── Regime detection ─────────────────────────────────────────────
+   Returns 'trending' | 'ranging' | 'volatile' | 'neutral'
+   Drives adaptive thresholds and bucket weight scaling.
+─────────────────────────────────────────────────────────────────── */
+function detectRegime(adxVal, atrVal, price) {
+  const atrPct = (atrVal && price) ? atrVal / price : 0;
+  if (atrPct > 0.010)  return 'volatile';   // >1% move per 15m candle
+  if (adxVal > 27)     return 'trending';
+  if (adxVal < 18 || atrPct < 0.003) return 'ranging';
+  return 'neutral';
+}
+
 function computeSignal(d) {
   const {
     price, rsiVal, stochRsiVal, ema9, ema21, ema50,
     macdData, bbData, atrVal, adxVal, obvSeries,
     volTrend, change24h, pivotHighs, pivotLows,
     candles, srData, structure, channel, pattern,
+    obImbalance, fundingRate, oiDelta,
     // 1m scalp inputs
     m1rsi, m1stochRsi, m1ema9, m1ema21, m1macd, m1volTrend, m1pattern, m1candles
   } = d;
@@ -548,7 +561,7 @@ function computeSignal(d) {
     ranging:      { s: 0,    lbl:'Ranging / No clear structure', cls:'neut' },
   };
   const sm = strMap[structure] || strMap.ranging;
-  factors.push({name:'Market Structure', weight:3, score:sm.s, cls:sm.cls});
+  factors.push({name:'Market Structure', weight:3, score:sm.s, cls:sm.cls, bucket:'structural'});
   reasons.structure = sm.lbl;
 
   // ── 2. EMA Alignment 9/21/50 (weight 2.5) ──
@@ -561,7 +574,7 @@ function computeSignal(d) {
     else if (ema9>ema21)                            { emaBull=0.3;  emaReason=`EMA9 above EMA21 — mild bull bias`; emaCls='bull'; }
     else                                            { emaBull=-0.3; emaReason=`EMA9 below EMA21 — mild bear bias`; emaCls='bear'; }
   }
-  factors.push({name:'EMA Alignment (9/21/50)', weight:2.5, score:emaBull, cls:emaCls});
+  factors.push({name:'EMA Alignment (9/21/50)', weight:2.5, score:emaBull, cls:emaCls, bucket:'structural'});
   reasons.ema = emaReason;
 
   // ── 3. Breakout / Key Levels (weight 3) ──
@@ -581,7 +594,7 @@ function computeSignal(d) {
       boBull=0; boReason=`No immediate key level — price in open air`; boCls='neut';
     }
   }
-  factors.push({name:'Key Levels / Breakout', weight:3, score:boBull, cls:boCls});
+  factors.push({name:'Key Levels / Breakout', weight:3, score:boBull, cls:boCls, bucket:'structural'});
   reasons.breakout = boReason;
 
   // ── 4. RSI(14) (weight 2) ──
@@ -595,7 +608,7 @@ function computeSignal(d) {
     else if (rsiVal>55)  { rsiBull=-0.2; rsiReason=`Soft overbought (${rsiVal.toFixed(1)}) — mild bear bias`; rsiCls='bear'; }
     else                 { rsiBull=0;    rsiReason=`Neutral (${rsiVal.toFixed(1)}) — no momentum edge`; rsiCls='neut'; }
   }
-  factors.push({name:'RSI (14)', weight:2, score:rsiBull, cls:rsiCls});
+  factors.push({name:'RSI (14)', weight:2, score:rsiBull, cls:rsiCls, bucket:'momentum'});
   reasons.rsi = rsiReason;
 
   // ── 5. Stochastic RSI (weight 1.5) ──
@@ -608,7 +621,7 @@ function computeSignal(d) {
     else if (stochRsiVal>50)  { srBull=0.3;  srReason=`StochRSI ${stochRsiVal.toFixed(0)} — above midline, mild bull`; srCls='bull'; }
     else                      { srBull=-0.3; srReason=`StochRSI ${stochRsiVal.toFixed(0)} — below midline, mild bear`; srCls='bear'; }
   }
-  factors.push({name:'Stochastic RSI', weight:1.5, score:srBull, cls:srCls});
+  factors.push({name:'Stochastic RSI', weight:1.5, score:srBull, cls:srCls, bucket:'momentum'});
   reasons.stochRsi = srReason;
 
   // ── 6. MACD (weight 2) ──
@@ -623,7 +636,7 @@ function computeSignal(d) {
     else if (macdData.hist<0&&macdData.macd>=0)              { macdBull=-0.5; macdReason='Hist crossing down, MACD above zero — early bear cross'; macdCls='bear'; }
     else                                                      { macdBull=0;    macdReason='MACD at zero crossover — undecided'; macdCls='neut'; }
   }
-  factors.push({name:'MACD (12/26/9)', weight:2, score:macdBull, cls:macdCls});
+  factors.push({name:'MACD (12/26/9)', weight:2, score:macdBull, cls:macdCls, bucket:'momentum'});
   reasons.macd = macdReason;
 
   // ── 7. Bollinger Bands (weight 1.5) ──
@@ -639,7 +652,7 @@ function computeSignal(d) {
     else if (pos<0.25)            { bbBull=0.3;  bbReason=`Price in lower BB quartile (${(pos*100).toFixed(0)}%) — approaching support`; bbCls='bull'; }
     else                          { bbBull=0;    bbReason=`Price in BB midzone (${(pos*100).toFixed(0)}%) — no edge`; bbCls='neut'; }
   }
-  factors.push({name:'Bollinger Bands (20,2)', weight:1.5, score:bbBull, cls:bbCls});
+  factors.push({name:'Bollinger Bands (20,2)', weight:1.5, score:bbBull, cls:bbCls, bucket:'momentum'});
   reasons.bb = bbReason;
 
   // ── 8. OBV trend (weight 1.5) ──
@@ -653,7 +666,7 @@ function computeSignal(d) {
     else if (obvUp&&!priceUp)  { obvBull=0.6; obvReason='OBV rising while price falls — bullish divergence, smart money accumulating'; obvCls='bull'; }
     else                       { obvBull=-0.6;obvReason='OBV falling while price rises — bearish divergence, distribution underway'; obvCls='bear'; }
   }
-  factors.push({name:'OBV (On-Balance Volume)', weight:1.5, score:obvBull, cls:obvCls});
+  factors.push({name:'OBV (On-Balance Volume)', weight:1.5, score:obvBull, cls:obvCls, bucket:'volume'});
   reasons.obv = obvReason;
 
   // ── 9. Volume spike (weight 1) ──
@@ -664,11 +677,11 @@ function computeSignal(d) {
   else if (volTrend>1.5)  { volBull=volDir*0.5; volReason=`High volume (${(volTrend*100).toFixed(0)}% of avg) — confirms ${volDir>0?'up':'down'} move`; volCls=volDir>0?'bull':'bear'; }
   else if (volTrend<0.5)  { volBull=-0.2;        volReason=`Very low volume (${(volTrend*100).toFixed(0)}% of avg) — weak conviction`; volCls='neut'; }
   else                    { volBull=0;            volReason=`Normal volume (${(volTrend*100).toFixed(0)}% of avg)`; volCls='neut'; }
-  factors.push({name:'Volume Spike', weight:1, score:volBull, cls:volCls});
+  factors.push({name:'Volume Spike', weight:1, score:volBull, cls:volCls, bucket:'volume'});
   reasons.vol = volReason;
 
   // ── 10. Candlestick pattern (weight 1) ──
-  factors.push({name:'Candle Pattern', weight:1, score:pattern.bias, cls:pattern.bias>0.3?'bull':pattern.bias<-0.3?'bear':'neut'});
+  factors.push({name:'Candle Pattern', weight:1, score:pattern.bias, cls:pattern.bias>0.3?'bull':pattern.bias<-0.3?'bear':'neut', bucket:'context'});
   reasons.candle = pattern.name + (pattern.bias===0?' — no directional bias':pattern.bias>0?' — bullish signal':' — bearish signal');
 
   // ── 11. 24h change context (weight 0.8) ──
@@ -679,7 +692,7 @@ function computeSignal(d) {
   else if (change24h>-2)  { chBull=-0.15;chReason=`Slightly negative ${change24h.toFixed(2)}%`; chCls='bear'; }
   else if (change24h>-5)  { chBull=-0.4; chReason=`Negative session ${change24h.toFixed(2)}%`; chCls='bear'; }
   else                    { chBull=-0.7; chReason=`Strong daily loss ${change24h.toFixed(2)}% — trend day`; chCls='bear'; }
-  factors.push({name:'24h Session Bias', weight:0.8, score:chBull, cls:chCls});
+  factors.push({name:'24h Session Bias', weight:0.8, score:chBull, cls:chCls, bucket:'context'});
   reasons.change = chReason;
 
   // ── 1m Scalp: RSI (weight 1.5) ──
@@ -692,7 +705,7 @@ function computeSignal(d) {
     else if (m1rsi>65)  {s=-0.8;r=`1m RSI ${m1rsi.toFixed(1)} — overbought, fade the move`;c='bear';}
     else if (m1rsi>55)  {s=-0.2;r=`1m RSI ${m1rsi.toFixed(1)} — leaning bearish`;c='bear';}
     else                {s=0;   r=`1m RSI ${m1rsi.toFixed(1)} — neutral`;c='neut';}
-    factors.push({name:'1m RSI', weight:1.5, score:s, cls:c}); reasons.m1rsi=r;
+    factors.push({name:'1m RSI', weight:1.5, score:s, cls:c, bucket:'scalp1m'}); reasons.m1rsi=r;
   }
 
   // ── 1m Scalp: StochRSI (weight 1.2) ──
@@ -704,7 +717,7 @@ function computeSignal(d) {
     else if (m1stochRsi>80)  {s=-0.7; r=`1m StochRSI ${m1stochRsi.toFixed(0)} — overbought on 1m`;c='bear';}
     else if (m1stochRsi>50)  {s=0.3;  r=`1m StochRSI ${m1stochRsi.toFixed(0)} — above mid, bull micro-trend`;c='bull';}
     else                     {s=-0.3; r=`1m StochRSI ${m1stochRsi.toFixed(0)} — below mid, bear micro-trend`;c='bear';}
-    factors.push({name:'1m StochRSI', weight:1.2, score:s, cls:c}); reasons.m1stoch=r;
+    factors.push({name:'1m StochRSI', weight:1.2, score:s, cls:c, bucket:'scalp1m'}); reasons.m1stoch=r;
   }
 
   // ── 1m Scalp: EMA cross 9/21 (weight 1.5) ──
@@ -715,7 +728,7 @@ function computeSignal(d) {
     else if (price<m1ema9&&m1ema9<m1ema21)  {s=-1;   r=`1m: Price<${fmt(m1ema9)}<EMA21 — full micro bear stack`;c='bear';}
     else if (m1ema9>m1ema21)                 {s=0.5;  r=`1m EMA9 above EMA21 — micro bullish cross`;c='bull';}
     else                                     {s=-0.5; r=`1m EMA9 below EMA21 — micro bearish cross`;c='bear';}
-    factors.push({name:'1m EMA (9/21)', weight:1.5, score:s, cls:c}); reasons.m1ema=r;
+    factors.push({name:'1m EMA (9/21)', weight:1.5, score:s, cls:c, bucket:'scalp1m'}); reasons.m1ema=r;
   }
 
   // ── 1m Scalp: MACD (weight 1.5) ──
@@ -728,7 +741,7 @@ function computeSignal(d) {
     else if (m1macd.hist<0&&m1macd.macd<0&&!hg)  {s=-1;   r='1m MACD hist falling below zero — strong bear scalp';c='bear';}
     else if (m1macd.hist<0&&m1macd.macd<0)        {s=-0.6; r='1m MACD negative — bear momentum';c='bear';}
     else                                           {s=-0.4; r='1m MACD hist flipping down — early bear cross';c='bear';}
-    factors.push({name:'1m MACD', weight:1.5, score:s, cls:c}); reasons.m1macd=r;
+    factors.push({name:'1m MACD', weight:1.5, score:s, cls:c, bucket:'scalp1m'}); reasons.m1macd=r;
   }
 
   // ── 1m Scalp: volume (weight 0.8) ──
@@ -738,30 +751,107 @@ function computeSignal(d) {
     if      (m1volTrend>2.0) {s=dir*0.9; r=`1m vol spike ${(m1volTrend*100).toFixed(0)}% avg — ${dir>0?'bull':'bear'} impulse`;c=dir>0?'bull':'bear';}
     else if (m1volTrend>1.4) {s=dir*0.5; r=`1m elevated vol ${(m1volTrend*100).toFixed(0)}% avg — confirms ${dir>0?'up':'down'}`;c=dir>0?'bull':'bear';}
     else                     {s=0;        r=`1m normal volume`;c='neut';}
-    factors.push({name:'1m Volume', weight:0.8, score:s, cls:c}); reasons.m1vol=r;
+    factors.push({name:'1m Volume', weight:0.8, score:s, cls:c, bucket:'scalp1m'}); reasons.m1vol=r;
   }
 
   // ── 1m Scalp: candle pattern (weight 0.8) ──
   if (m1pattern) {
     factors.push({name:'1m Candle Pattern', weight:0.8, score:m1pattern.bias,
-      cls:m1pattern.bias>0.3?'bull':m1pattern.bias<-0.3?'bear':'neut'});
+      cls:m1pattern.bias>0.3?'bull':m1pattern.bias<-0.3?'bear':'neut', bucket:'scalp1m'});
     reasons.m1candle=`1m: ${m1pattern.name}${m1pattern.bias===0?' — no bias':m1pattern.bias>0?' — bullish':' — bearish'}`;
   }
 
-  // ── ADX modifier ──
-  let adxMult = 1;
-  if (adxVal!=null) {
-    if      (adxVal>40) adxMult=1.15; // strong trend — amplify
-    else if (adxVal>25) adxMult=1.0;
-    else if (adxVal>15) adxMult=0.85; // weak trend — dampen
-    else                adxMult=0.65; // ranging — heavily dampen
+  // ── Microstructure 1: Order Book Imbalance (weight 2.5) ──
+  // Leading indicator — actual resting bid/ask pressure right now.
+  // Positive imbalance = more bid volume = buy pressure.
+  let obBull=0, obReason='No order book data', obCls='neut';
+  if (obImbalance !== null) {
+    if      (obImbalance >  0.40) { obBull= 1;   obReason=`Heavy bid wall (${(obImbalance*100).toFixed(0)}% imbalance) — strong buy pressure`; obCls='bull'; }
+    else if (obImbalance >  0.20) { obBull= 0.7; obReason=`Bid-heavy book (${(obImbalance*100).toFixed(0)}%) — buyers absorbing`; obCls='bull'; }
+    else if (obImbalance >  0.08) { obBull= 0.3; obReason=`Slight bid imbalance (${(obImbalance*100).toFixed(0)}%) — mild buy pressure`; obCls='bull'; }
+    else if (obImbalance < -0.40) { obBull=-1;   obReason=`Heavy ask wall (${(obImbalance*100).toFixed(0)}% imbalance) — strong sell pressure`; obCls='bear'; }
+    else if (obImbalance < -0.20) { obBull=-0.7; obReason=`Ask-heavy book (${(obImbalance*100).toFixed(0)}%) — sellers absorbing`; obCls='bear'; }
+    else if (obImbalance < -0.08) { obBull=-0.3; obReason=`Slight ask imbalance (${(obImbalance*100).toFixed(0)}%) — mild sell pressure`; obCls='bear'; }
+    else                          { obBull= 0;   obReason=`Balanced order book (${(obImbalance*100).toFixed(0)}%) — no directional pressure`; obCls='neut'; }
+  }
+  factors.push({name:'Order Book Imbalance', weight:2.5, score:obBull, cls:obCls, bucket:'microstructure'});
+  reasons.orderBook = obReason;
+
+  // ── Microstructure 2: Funding Rate (weight 2.0) ──
+  // Contrarian signal: high positive funding = longs paying shorts = market overly long = bearish fade.
+  // Negative funding = shorts paying longs = market overly short = bullish squeeze.
+  let frBull=0, frReason='No funding rate data', frCls='neut';
+  if (fundingRate !== null) {
+    const frPct = fundingRate * 100;
+    if      (fundingRate >  0.0060) { frBull=-1;   frReason=`Extreme positive funding (${frPct.toFixed(4)}%) — longs severely overcrowded, short squeeze risk`; frCls='bear'; }
+    else if (fundingRate >  0.0020) { frBull=-0.7; frReason=`High positive funding (${frPct.toFixed(4)}%) — market too long, reversal risk`; frCls='bear'; }
+    else if (fundingRate >  0.0005) { frBull=-0.2; frReason=`Mild positive funding (${frPct.toFixed(4)}%) — slight long bias in market`; frCls='bear'; }
+    else if (fundingRate < -0.0060) { frBull= 1;   frReason=`Extreme negative funding (${frPct.toFixed(4)}%) — shorts severely overcrowded, squeeze likely`; frCls='bull'; }
+    else if (fundingRate < -0.0020) { frBull= 0.7; frReason=`High negative funding (${frPct.toFixed(4)}%) — market too short, bull squeeze setup`; frCls='bull'; }
+    else if (fundingRate < -0.0005) { frBull= 0.2; frReason=`Mild negative funding (${frPct.toFixed(4)}%) — slight short bias in market`; frCls='bull'; }
+    else                            { frBull= 0;   frReason=`Neutral funding (${frPct.toFixed(4)}%) — balanced positioning`; frCls='neut'; }
+  }
+  factors.push({name:'Funding Rate', weight:2.0, score:frBull, cls:frCls, bucket:'microstructure'});
+  reasons.fundingRate = frReason;
+
+  // ── Microstructure 3: Open Interest Delta (weight 1.5) ──
+  // New money confirmation: OI rising with price = real conviction.
+  // OI falling with price = shorts unwinding not new longs = weaker signal.
+  let oiBull=0, oiReason='No OI data', oiCls='neut';
+  if (oiDelta !== null) {
+    const priceUp = price > (candles.length>1 ? candles[candles.length-2].close : price);
+    const oiUp    = oiDelta > 0.001;  // meaningful OI increase
+    const oiDn    = oiDelta < -0.001;
+    if      (oiUp  && priceUp)  { oiBull= 0.8; oiReason=`OI +${(oiDelta*100).toFixed(3)}% with price rising — new longs, confirmed bull momentum`; oiCls='bull'; }
+    else if (oiUp  && !priceUp) { oiBull=-0.8; oiReason=`OI +${(oiDelta*100).toFixed(3)}% with price falling — new shorts, confirmed bear momentum`; oiCls='bear'; }
+    else if (oiDn  && priceUp)  { oiBull= 0.4; oiReason=`OI ${(oiDelta*100).toFixed(3)}% with price rising — short covering, weaker bull signal`; oiCls='bull'; }
+    else if (oiDn  && !priceUp) { oiBull=-0.4; oiReason=`OI ${(oiDelta*100).toFixed(3)}% with price falling — long liquidation, weaker bear signal`; oiCls='bear'; }
+    else                        { oiBull= 0;   oiReason=`OI flat (${(oiDelta*100).toFixed(3)}%) — no new positioning`; oiCls='neut'; }
+  }
+  factors.push({name:'Open Interest Delta', weight:1.5, score:oiBull, cls:oiCls, bucket:'microstructure'});
+  reasons.openInterest = oiReason;
+
+  // ── Bucket normalization ──
+  // Each independent evidence group gets a fixed share of the final score.
+  // This prevents the 4 correlated momentum oscillators from dominating.
+  const BUCKET_WEIGHTS = {
+    structural:     0.30,  // trend + S/R + EMA — most important context
+    momentum:       0.15,  // RSI/StochRSI/MACD/BB — correlated, capped together
+    microstructure: 0.25,  // order book + funding + OI — leading, non-OHLCV
+    volume:         0.12,  // OBV + volume spike
+    context:        0.06,  // 24h bias + candle pattern
+    scalp1m:        0.12,  // 1m entry timing layer
+  };
+
+  const buckets = {};
+  for (const f of factors) {
+    const b = f.bucket || 'context';
+    if (!buckets[b]) buckets[b] = { sumW: 0, sumWS: 0 };
+    buckets[b].sumW  += f.weight;
+    buckets[b].sumWS += f.score * f.weight;
   }
 
-  // ── Weighted score ──
-  const totalW = factors.reduce((s,f)=>s+f.weight,0);
-  let score    = factors.reduce((s,f)=>s+f.score*f.weight,0)/totalW;
+  let score = 0;
+  let adxMult = 1;
+  if (adxVal != null) {
+    if      (adxVal > 40) adxMult = 1.15;
+    else if (adxVal > 25) adxMult = 1.0;
+    else if (adxVal > 15) adxMult = 0.85;
+    else                  adxMult = 0.65;
+  }
+  for (const [name, bw] of Object.entries(BUCKET_WEIGHTS)) {
+    if (buckets[name] && buckets[name].sumW > 0) {
+      const bucketScore = buckets[name].sumWS / buckets[name].sumW;
+      score += bucketScore * bw;
+    }
+  }
   score *= adxMult;
   score = Math.max(-1, Math.min(1, score));
+
+  // ── Regime detection & adaptive threshold ──
+  const regime = detectRegime(adxVal, atrVal, price);
+  const THRESHOLDS = { trending: 0.15, ranging: 0.27, volatile: 0.36, neutral: 0.20 };
+  const threshold  = THRESHOLDS[regime];
 
   const bull = factors.filter(f=>f.score>0.1).length;
   const bear = factors.filter(f=>f.score<-0.1).length;
@@ -769,18 +859,16 @@ function computeSignal(d) {
 
   let signal, confidence;
   const abs = Math.abs(score);
-  if      (score>0.18)  { signal='LONG';  confidence=Math.round(50+abs*50); }
-  else if (score<-0.18) { signal='SHORT'; confidence=Math.round(50+abs*50); }
-  else                  { signal='HOLD';  confidence=Math.round(60-abs*80); }
+  if      (score >  threshold) { signal='LONG';  confidence=Math.round(50+abs*50); }
+  else if (score < -threshold) { signal='SHORT'; confidence=Math.round(50+abs*50); }
+  else                         { signal='HOLD';  confidence=Math.round(60-abs*80); }
   confidence = Math.max(51, Math.min(98, confidence));
 
   // ── Commission viability check ──
-  // Estimated TP move: 2×ATR from entry. Must exceed round-trip taker fee to be worth trading.
-  // Require TP % ≥ 3× round-trip fee to give meaningful edge above breakeven.
   let feeNote = null;
   if (signal !== 'HOLD' && atrVal && price) {
-    const tpPct = (atrVal * 2) / price;         // estimated TP distance as % of price
-    const minEdge = FEE_RT * 3;                  // need at least 3× round-trip to have real edge
+    const tpPct  = (atrVal * 2) / price;
+    const minEdge = FEE_RT * 3;
     if (tpPct < FEE_RT) {
       signal = 'HOLD';
       feeNote = `Volatility too low — est. move ${(tpPct*100).toFixed(3)}% < fee cost ${(FEE_RT*100).toFixed(3)}%`;
@@ -796,7 +884,7 @@ function computeSignal(d) {
     .slice(0,3);
   const summary = topFactors.map(f=>`${f.score>0?'▲':'▼'} ${f.name}`).join(' · ');
 
-  return {signal, confidence, score, reasons, factors, bull, bear, neut, summary, adxMult, feeNote};
+  return {signal, confidence, score, reasons, factors, bull, bear, neut, summary, adxMult, feeNote, regime, threshold};
 }
 
 /* ═══════════════════════════════════════════════════
@@ -824,7 +912,7 @@ function updatePriceStrip({price,change24h,high24h,low24h,volume24h}) {
 }
 
 function updateSignal(result) {
-  const {signal,confidence,bull,bear,neut,summary,feeNote} = result;
+  const {signal,confidence,bull,bear,neut,summary,feeNote,regime,threshold} = result;
   const pill=document.getElementById('signal-pill');
   pill.className=`signal-pill ${signal}`;
   const icons={LONG:'▲ GO LONG',SHORT:'▼ GO SHORT',HOLD:'⏸ HOLD'};
@@ -833,7 +921,9 @@ function updateSignal(result) {
   setEl('conf-pct', confidence+'%');
   const bar=document.getElementById('conf-bar');
   bar.style.width=confidence+'%'; bar.className=`conf-bar-fill ${signal}`;
-  setEl('tally', `<span class="tally-pill tally-bull">▲ ${bull} Bullish</span><span class="tally-pill tally-bear">▼ ${bear} Bearish</span><span class="tally-pill tally-neut">— ${neut} Neutral</span>`);
+  const regimeColors={trending:'var(--green)',ranging:'var(--yellow)',volatile:'var(--red)',neutral:'var(--muted)'};
+  const regimeIcons ={trending:'📈',ranging:'↔',volatile:'⚡',neutral:'—'};
+  setEl('tally', `<span class="tally-pill tally-bull">▲ ${bull} Bullish</span><span class="tally-pill tally-bear">▼ ${bear} Bearish</span><span class="tally-pill tally-neut">— ${neut} Neutral</span>&nbsp;&nbsp;<span style="font-size:11px;color:${regimeColors[regime]||'var(--muted)'}">${regimeIcons[regime]||'—'} ${(regime||'').toUpperCase()} · threshold ${threshold!==undefined?(threshold*100).toFixed(0)+'%':'—'}</span>`);
   const summaryText = feeNote
     ? `${summary||'—'} · ⚠ ${feeNote}`
     : (summary||'Waiting for data…');
@@ -885,7 +975,8 @@ function badge(cls,lbl) { return `<span class="ind-badge ${bCls(cls)}">${lbl}</s
 
 function updateIndicators(d, result) {
   const {rsiVal,stochRsiVal,ema9,ema21,ema50,macdData,bbData,atrVal,adxVal,volTrend,change24h,price,candles,pattern,srData,
-         m1rsi,m1stochRsi,m1ema9,m1ema21,m1macd,m1volTrend,m1pattern} = d;
+         m1rsi,m1stochRsi,m1ema9,m1ema21,m1macd,m1volTrend,m1pattern,
+         obImbalance,fundingRate,oiDelta} = d;
   const {reasons} = result;
 
   const cards = [
@@ -1009,6 +1100,35 @@ function updateIndicators(d, result) {
       lbl: m1volTrend>1.5?'HIGH':m1volTrend<0.6?'LOW':'AVERAGE',
       why: reasons.m1vol||'—',
     },
+    // ── Microstructure cards ──
+    {
+      name:'Order Book Imbalance',
+      val: obImbalance!==null ? `${obImbalance>=0?'+':''}${(obImbalance*100).toFixed(1)}% bid/ask` : '—',
+      cls: obImbalance!==null?(obImbalance>0.08?'bull':obImbalance<-0.08?'bear':'neut'):'neut',
+      lbl: obImbalance!==null?(obImbalance>0.20?'BID WALL':obImbalance>0.08?'BID-HEAVY':obImbalance<-0.20?'ASK WALL':obImbalance<-0.08?'ASK-HEAVY':'BALANCED'):'NO DATA',
+      why: result.reasons.orderBook||'—',
+    },
+    {
+      name:'Funding Rate',
+      val: fundingRate!==null ? `${(fundingRate*100).toFixed(4)}%` : '—',
+      cls: fundingRate!==null?(fundingRate>0.002?'bear':fundingRate<-0.002?'bull':fundingRate>0.0005?'bear':fundingRate<-0.0005?'bull':'neut'):'neut',
+      lbl: fundingRate!==null?(fundingRate>0.006?'EXTREME LONG':fundingRate>0.002?'LONGS CROWDED':fundingRate<-0.006?'EXTREME SHORT':fundingRate<-0.002?'SHORTS CROWDED':'NEUTRAL'):'NO DATA',
+      why: result.reasons.fundingRate||'—',
+    },
+    {
+      name:'Open Interest Δ',
+      val: oiDelta!==null ? `${oiDelta>=0?'+':''}${(oiDelta*100).toFixed(3)}%` : '—',
+      cls: oiDelta!==null?(Math.abs(oiDelta)>0.001?(oiDelta>0?'bull':'bear'):'neut'):'neut',
+      lbl: oiDelta!==null?(Math.abs(oiDelta)<0.001?'FLAT':oiDelta>0?'RISING':'FALLING'):'NO DATA',
+      why: result.reasons.openInterest||'—',
+    },
+    {
+      name:'Market Regime',
+      val: result.regime ? result.regime.toUpperCase() : '—',
+      cls: ({trending:'bull',ranging:'neut',volatile:'bear',neutral:'neut'})[result.regime]||'neut',
+      lbl: ({trending:'TRENDING',ranging:'RANGING',volatile:'VOLATILE',neutral:'NEUTRAL'})[result.regime]||'—',
+      why: `ADX ${adxVal!=null?adxVal.toFixed(1):'—'} · ATR ${atrVal!=null?(atrVal/price*100).toFixed(3)+'% of price':'—'} · Threshold ${result.threshold!==undefined?(result.threshold*100).toFixed(0)+'%':'—'}`,
+    },
   ];
 
   document.getElementById('ind-grid').innerHTML = cards.map(c => `
@@ -1031,13 +1151,30 @@ async function fetchKlines(interval='15m', limit=200) {
   const raw = await r.json();
   return raw.map(k=>({open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5]}));
 }
+async function fetchOrderBook() {
+  const r = await fetch('https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20');
+  return r.json(); // { bids:[[price,qty],...], asks:[[price,qty],...] }
+}
+async function fetchFundingRate() {
+  const r = await fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1');
+  const d = await r.json();
+  return d.length ? +d[0].fundingRate : null;
+}
+async function fetchOpenInterest() {
+  const r = await fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT');
+  const d = await r.json();
+  return d.openInterest ? +d.openInterest : null;
+}
 
 async function refresh() {
   document.getElementById('refresh-txt').innerHTML='<span class="spinner"></span> Updating…';
   try {
-    const [ticker, candles, c1m, liqs] = await Promise.all([
+    const [ticker, candles, c1m, liqs, orderBook, fundingRate, openInterest] = await Promise.all([
       fetchTicker(), fetchKlines('15m',200), fetchKlines('1m',120),
-      fetchLiquidations().catch(()=>[])
+      fetchLiquidations().catch(()=>[]),
+      fetchOrderBook().catch(()=>null),
+      fetchFundingRate().catch(()=>null),
+      fetchOpenInterest().catch(()=>null),
     ]);
 
     const price     = +ticker.lastPrice;
@@ -1085,12 +1222,29 @@ async function refresh() {
     const m1avgVol    = vol1m.slice(-21,-1).reduce((s,v)=>s+v,0)/20;
     const m1volTrend  = m1avgVol>0 ? m1recentVol/m1avgVol : 1;
 
+    // ── Order book imbalance (bid volume vs ask volume, top 10 levels) ──
+    let obImbalance = null;
+    if (orderBook) {
+      const bidVol = orderBook.bids.slice(0,10).reduce((s,[,q])=>s+ +q, 0);
+      const askVol = orderBook.asks.slice(0,10).reduce((s,[,q])=>s+ +q, 0);
+      obImbalance  = (bidVol + askVol) > 0 ? (bidVol - askVol) / (bidVol + askVol) : null;
+    }
+
+    // ── OI delta: compare current snapshot to last refresh ──
+    let oiDelta = null;
+    if (openInterest !== null && lastOI !== null && lastOI > 0) {
+      oiDelta = (openInterest - lastOI) / lastOI; // fractional change
+    }
+    if (openInterest !== null) lastOI = openInterest;
+
     const d = {
       price, change24h, high24h, low24h, volume24h,
       rsiVal, stochRsiVal, ema9, ema21, ema50,
       macdData, bbData, atrVal, adxVal, obvSeries,
       volTrend, pivotHighs, pivotLows, candles,
       structure, srData, channel, pattern,
+      // microstructure
+      obImbalance, fundingRate, oiDelta,
       // 1m
       m1rsi, m1stochRsi, m1ema9, m1ema21, m1macd,
       m1volTrend, m1pattern, m1candles: c1m
@@ -1098,10 +1252,13 @@ async function refresh() {
 
     const result = computeSignal(d);
 
-    lastPrice  = price;
-    lastScore  = result.score;
-    lastATR    = d.atrVal;
-    lastSRData = d.srData;
+    lastPrice      = price;
+    lastScore      = result.score;
+    lastATR        = d.atrVal;
+    lastSRData     = d.srData;
+    lastConfidence = result.confidence;
+    lastRegime     = result.regime;
+    lastCandles1m  = c1m;
 
     updatePriceStrip(d);
     updateSignal(result);
@@ -1120,10 +1277,14 @@ async function refresh() {
 /* ═══════════════════════════════════════════════════
    POSITION TRACKER
 ═══════════════════════════════════════════════════ */
-let position    = null; // { type, entryPrice, entryTime, tp, sl, countdownEnd }
-let lastPrice   = null;
-let lastScore   = 0;
-let lastATR     = null;
+let position      = null; // { type, entryPrice, entryTime, tp, sl, countdownEnd, tradeSize }
+let lastPrice     = null;
+let lastScore     = 0;
+let lastATR       = null;
+let lastOI        = null; // previous open interest snapshot for delta
+let lastConfidence = 0;
+let lastRegime    = 'neutral';
+let lastCandles1m = null; // kept for realized vol countdown
 let lastSRData  = null;
 let countdownTimer = null;
 
@@ -1135,13 +1296,22 @@ const FEE_TAKER = 0.00055; // 0.055%
 const FEE_MAKER = 0.0002;  // 0.020%
 const FEE_RT    = FEE_TAKER * 2; // worst-case round-trip: 0.11%
 
-/* Estimate how many seconds to reach distanceDollars at current volatility.
-   Uses ATR as "typical move per 15-min candle". */
+/* Estimate how many seconds to reach distanceDollars.
+   Prefers realized 1m volatility (std-dev of last 20 1m returns × price).
+   Falls back to ATR/15 if 1m data unavailable. */
 function estimateSecs(distanceDollars) {
+  // Try realized vol from 1m candles first
+  if (lastCandles1m && lastCandles1m.length >= 21 && lastPrice) {
+    const slice   = lastCandles1m.slice(-21);
+    const returns = slice.slice(1).map((c,i) => (c.close - slice[i].close) / slice[i].close);
+    const mean    = returns.reduce((s,r)=>s+r,0) / returns.length;
+    const stdRet  = Math.sqrt(returns.reduce((s,r)=>s+(r-mean)**2,0) / returns.length);
+    const stdDollar = stdRet * lastPrice; // $ std-dev per 1m candle
+    if (stdDollar > 0) return Math.round((distanceDollars / stdDollar) * 60);
+  }
+  // Fallback: ATR-based estimate
   if (!lastATR || lastATR === 0) return null;
-  const minutesPerCandle = 15;
-  const dollarsPerMinute = lastATR / minutesPerCandle;
-  return Math.round((distanceDollars / dollarsPerMinute) * 60); // convert minutes→seconds
+  return Math.round((distanceDollars / (lastATR / 15)) * 60);
 }
 
 function computeTPSL(type, entry) {
@@ -1174,7 +1344,15 @@ function openPosition(type) {
   const estSecs    = estimateSecs(distToTP);
   const countdownEnd = estSecs ? Date.now() + estSecs * 1000 : null;
 
-  position = { type, entryPrice: lastPrice, entryTime: new Date(), tp, sl, countdownEnd };
+  // Volatility-adjusted position sizing: risk 2% of balance per trade,
+  // scaled by SL distance and confidence. Cap at 25% of balance.
+  const stopDist   = lastPrice > 0 ? Math.abs(lastPrice - sl) / lastPrice : 0.01;
+  const confScale  = Math.max(0.5, Math.min(1.0, (lastConfidence - 50) / 50));
+  const riskAmt    = paperBal * 0.02; // 2% risk per trade
+  const rawSize    = stopDist > 0 ? (riskAmt / stopDist) * confScale : paperBal * 0.10;
+  const tradeSize  = Math.min(rawSize, paperBal * 0.25);
+
+  position = { type, entryPrice: lastPrice, entryTime: new Date(), tp, sl, countdownEnd, tradeSize };
 
   document.getElementById('btn-long').classList.toggle('active', type==='long');
   document.getElementById('btn-short').classList.toggle('active', type==='short');
@@ -1400,8 +1578,8 @@ function settlePaperTrade(exitPrice) {
   const pnlPct = isLong
     ? (exitPrice - position.entryPrice) / position.entryPrice
     : (position.entryPrice - exitPrice) / position.entryPrice;
-  const pnl = paperBal * 0.1 * pnlPct;  // trade with 10% of balance each time
-  paperBal += pnl;
+  const tradeSize = position.tradeSize || paperBal * 0.10;
+  const pnl = tradeSize * pnlPct;
   paperTrades.unshift({
     type: position.type,
     entry: position.entryPrice,
