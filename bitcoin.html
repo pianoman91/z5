@@ -441,6 +441,20 @@ function obvCalc(candles) {
   return s;
 }
 
+/* CVD — cumulative sum of (takerBuyVol - takerSellVol) per candle.
+   takerBuyVol is k[9] from Binance klines; takerSellVol = volume - takerBuyVol.
+   Measures real money flow direction, not just price direction. */
+function cvdCalc(candles) {
+  if (!candles || candles.length < 2) return [];
+  let cum = 0;
+  return candles.map(c => {
+    const buy  = c.takerBuyVol  ?? c.volume * 0.5;
+    const sell = c.volume - buy;
+    cum += (buy - sell);
+    return cum;
+  });
+}
+
 /* ─── Pivot detection (n bars each side) ─── */
 function findPivots(candles, n=3) {
   const highs=[], lows=[];
@@ -544,6 +558,9 @@ function computeSignal(d) {
     macdData, bbData, atrVal, adxVal, obvSeries,
     volTrend, change24h, pivotHighs, pivotLows,
     candles, srData, structure, channel, pattern,
+    ema9_4h, ema21_4h, ema50_4h, structure4h,
+    ema9_1d, ema21_1d, structure1d,
+    cvdSeries, liqs, fearGreedVal,
     obImbalance, fundingRate, oiDelta,
     // 1m scalp inputs
     m1rsi, m1stochRsi, m1ema9, m1ema21, m1macd, m1volTrend, m1pattern, m1candles
@@ -761,6 +778,93 @@ function computeSignal(d) {
     reasons.m1candle=`1m: ${m1pattern.name}${m1pattern.bias===0?' — no bias':m1pattern.bias>0?' — bullish':' — bearish'}`;
   }
 
+  // ── 4H Trend Filter (weight 3.0, structural bucket) ──
+  // Highest-value addition: only trade 15m signals that align with the 4H trend.
+  // A perfect 15m LONG signal against a 4H downtrend loses far more often than it wins.
+  let trend4hBull=0, trend4hReason='No 4H data', trend4hCls='neut';
+  if (ema9_4h && ema21_4h && ema50_4h) {
+    const strScore4h = {uptrend:1, accumulation:0.5, ranging:0, distribution:-0.5, downtrend:-1}[structure4h] ?? 0;
+    let emaScore4h = 0;
+    if      (price>ema9_4h && ema9_4h>ema21_4h && ema21_4h>ema50_4h) emaScore4h =  1;
+    else if (price<ema9_4h && ema9_4h<ema21_4h && ema21_4h<ema50_4h) emaScore4h = -1;
+    else if (ema9_4h>ema21_4h && ema21_4h>ema50_4h)                  emaScore4h =  0.6;
+    else if (ema9_4h<ema21_4h && ema21_4h<ema50_4h)                  emaScore4h = -0.6;
+    else                                                               emaScore4h =  ema9_4h>ema21_4h ? 0.3 : -0.3;
+    trend4hBull = Math.max(-1, Math.min(1, emaScore4h*0.6 + strScore4h*0.4));
+    trend4hCls  = trend4hBull > 0.2 ? 'bull' : trend4hBull < -0.2 ? 'bear' : 'neut';
+    trend4hReason = `4H: ${structure4h} · EMA stack ${emaScore4h>0?'bullish':'bearish'} (9=${fmt(ema9_4h)} 21=${fmt(ema21_4h)} 50=${fmt(ema50_4h)})`;
+  }
+  factors.push({name:'4H Trend', weight:3.0, score:trend4hBull, cls:trend4hCls, bucket:'structural'});
+  reasons.trend4h = trend4hReason;
+
+  // ── Daily Trend Filter (weight 2.0, structural bucket) ──
+  // Macro directional bias. If daily structure is downtrend, even good 4H signals fail more often.
+  let trend1dBull=0, trend1dReason='No daily data', trend1dCls='neut';
+  if (ema9_1d && ema21_1d) {
+    const strScore1d = {uptrend:1, accumulation:0.5, ranging:0, distribution:-0.5, downtrend:-1}[structure1d] ?? 0;
+    const emaScore1d = ema9_1d > ema21_1d ? 0.7 : -0.7;
+    trend1dBull = Math.max(-1, Math.min(1, emaScore1d*0.5 + strScore1d*0.5));
+    trend1dCls  = trend1dBull > 0.2 ? 'bull' : trend1dBull < -0.2 ? 'bear' : 'neut';
+    trend1dReason = `Daily: ${structure1d} · EMA9 ${ema9_1d>ema21_1d?'above':'below'} EMA21 (${fmt(ema9_1d)} vs ${fmt(ema21_1d)})`;
+  }
+  factors.push({name:'Daily Trend', weight:2.0, score:trend1dBull, cls:trend1dCls, bucket:'structural'});
+  reasons.trend1d = trend1dReason;
+
+  // ── CVD — Cumulative Volume Delta (weight 1.5, volume bucket) ──
+  // Measures real money flow direction: taker buys minus taker sells, cumulated.
+  // Unlike OBV (which uses candle direction), CVD uses actual aggressive order flow.
+  let cvdBull=0, cvdReason='No CVD data', cvdCls='neut';
+  if (cvdSeries && cvdSeries.length >= 10) {
+    const cvdNow = last(cvdSeries);
+    const cvd10  = cvdSeries[cvdSeries.length - 10];
+    const cvdUp  = cvdNow > cvd10;
+    const prUp   = price > candles[candles.length - 10]?.close;
+    if      ( cvdUp &&  prUp)  { cvdBull= 0.8; cvdReason=`CVD rising (${((cvdNow-cvd10)/1e3).toFixed(1)}K Δ) with price — buyers driving the move`; cvdCls='bull'; }
+    else if (!cvdUp && !prUp)  { cvdBull=-0.8; cvdReason=`CVD falling (${((cvdNow-cvd10)/1e3).toFixed(1)}K Δ) with price — sellers driving the move`; cvdCls='bear'; }
+    else if ( cvdUp && !prUp)  { cvdBull= 0.7; cvdReason=`CVD rising while price falls — accumulation divergence (smart money buying)`; cvdCls='bull'; }
+    else                       { cvdBull=-0.7; cvdReason=`CVD falling while price rises — distribution divergence (smart money selling)`; cvdCls='bear'; }
+  }
+  factors.push({name:'CVD (Volume Delta)', weight:1.5, score:cvdBull, cls:cvdCls, bucket:'volume'});
+  reasons.cvd = cvdReason;
+
+  // ── Liquidation Sentiment (weight 1.0, volume bucket) ──
+  // Contrarian: a cascade of long liquidations means the market just force-sold
+  // longs → price likely oversold → bounce probability increases.
+  let liqBull=0, liqReason='No recent liquidation data', liqCls='neut';
+  if (liqs && liqs.length > 0) {
+    const cut15m = Date.now() - 15 * 60_000;
+    const recent = liqs.filter(l => l.time > cut15m);
+    const longLiqUsd  = recent.filter(l=>l.side==='SELL').reduce((s,l)=>s+ +l.averagePrice * +l.origQty, 0);
+    const shortLiqUsd = recent.filter(l=>l.side==='BUY' ).reduce((s,l)=>s+ +l.averagePrice * +l.origQty, 0);
+    const total = longLiqUsd + shortLiqUsd;
+    if (total > 500_000) {
+      const ratio = (longLiqUsd - shortLiqUsd) / total; // +1 = all longs liq'd, -1 = all shorts liq'd
+      liqBull  = -ratio * 0.8; // contrarian: longs liq'd → oversold → bullish
+      liqCls   = liqBull > 0.2 ? 'bull' : liqBull < -0.2 ? 'bear' : 'neut';
+      liqReason = `$${(total/1e6).toFixed(2)}M liq in 15m — ${longLiqUsd>shortLiqUsd?'long':'short'} cascade (${(Math.abs(ratio)*100).toFixed(0)}%) → contrarian ${liqBull>0?'bullish':'bearish'}`;
+    } else {
+      liqReason = `Low liq activity ($${(total/1e3).toFixed(0)}K in 15m) — no cascade signal`;
+    }
+  }
+  factors.push({name:'Liquidation Sentiment', weight:1.0, score:liqBull, cls:liqCls, bucket:'volume'});
+  reasons.liqSentiment = liqReason;
+
+  // ── Fear & Greed Index (weight 1.0, context bucket) ──
+  // Contrarian macro sentiment. Extreme Fear historically precedes rallies;
+  // Extreme Greed historically precedes corrections.
+  let fgBull=0, fgReason='No F&G data', fgCls='neut';
+  if (fearGreedVal !== null) {
+    if      (fearGreedVal <= 20) { fgBull= 0.9; fgReason=`Extreme Fear (${fearGreedVal}) — historically strong contrarian bull signal`; fgCls='bull'; }
+    else if (fearGreedVal <= 35) { fgBull= 0.5; fgReason=`Fear (${fearGreedVal}) — market overly pessimistic, mild bull bias`; fgCls='bull'; }
+    else if (fearGreedVal <= 45) { fgBull= 0.2; fgReason=`Mild Fear (${fearGreedVal}) — slight bullish lean`; fgCls='bull'; }
+    else if (fearGreedVal <= 55) { fgBull= 0;   fgReason=`Neutral (${fearGreedVal}) — balanced market sentiment`; fgCls='neut'; }
+    else if (fearGreedVal <= 65) { fgBull=-0.2; fgReason=`Mild Greed (${fearGreedVal}) — slight bearish lean`; fgCls='bear'; }
+    else if (fearGreedVal <= 80) { fgBull=-0.5; fgReason=`Greed (${fearGreedVal}) — market overconfident, mild bear bias`; fgCls='bear'; }
+    else                         { fgBull=-0.9; fgReason=`Extreme Greed (${fearGreedVal}) — historically strong contrarian bear signal`; fgCls='bear'; }
+  }
+  factors.push({name:'Fear & Greed', weight:1.0, score:fgBull, cls:fgCls, bucket:'context'});
+  reasons.fearGreed = fgReason;
+
   // ── Microstructure 1: Order Book Imbalance (weight 2.5) ──
   // Leading indicator — actual resting bid/ask pressure right now.
   // Positive imbalance = more bid volume = buy pressure.
@@ -976,7 +1080,9 @@ function badge(cls,lbl) { return `<span class="ind-badge ${bCls(cls)}">${lbl}</s
 function updateIndicators(d, result) {
   const {rsiVal,stochRsiVal,ema9,ema21,ema50,macdData,bbData,atrVal,adxVal,volTrend,change24h,price,candles,pattern,srData,
          m1rsi,m1stochRsi,m1ema9,m1ema21,m1macd,m1volTrend,m1pattern,
-         obImbalance,fundingRate,oiDelta} = d;
+         obImbalance,fundingRate,oiDelta,
+         ema9_4h,ema21_4h,structure4h,ema9_1d,ema21_1d,structure1d,
+         cvdSeries,fearGreedVal} = d;
   const {reasons} = result;
 
   const cards = [
@@ -1100,6 +1206,44 @@ function updateIndicators(d, result) {
       lbl: m1volTrend>1.5?'HIGH':m1volTrend<0.6?'LOW':'AVERAGE',
       why: reasons.m1vol||'—',
     },
+    // ── Higher timeframe cards ──
+    {
+      name:'4H Trend',
+      val: structure4h ? structure4h.charAt(0).toUpperCase()+structure4h.slice(1) : '—',
+      cls: result.factors.find(f=>f.name==='4H Trend')?.cls || 'neut',
+      lbl: result.factors.find(f=>f.name==='4H Trend')?.cls==='bull'?'BULLISH':result.factors.find(f=>f.name==='4H Trend')?.cls==='bear'?'BEARISH':'NEUTRAL',
+      why: result.reasons.trend4h || '—',
+    },
+    {
+      name:'Daily Trend',
+      val: structure1d ? structure1d.charAt(0).toUpperCase()+structure1d.slice(1) : '—',
+      cls: result.factors.find(f=>f.name==='Daily Trend')?.cls || 'neut',
+      lbl: result.factors.find(f=>f.name==='Daily Trend')?.cls==='bull'?'BULLISH':result.factors.find(f=>f.name==='Daily Trend')?.cls==='bear'?'BEARISH':'NEUTRAL',
+      why: result.reasons.trend1d || '—',
+    },
+    // ── Volume delta ──
+    {
+      name:'CVD (Volume Delta)',
+      val: cvdSeries?.length ? (() => { const d=last(cvdSeries)-cvdSeries[cvdSeries.length-10]; return `${d>=0?'+':''}${(d/1e3).toFixed(1)}K (10-bar)`; })() : '—',
+      cls: result.factors.find(f=>f.name==='CVD (Volume Delta)')?.cls || 'neut',
+      lbl: result.factors.find(f=>f.name==='CVD (Volume Delta)')?.cls==='bull'?'ACCUMULATION':result.factors.find(f=>f.name==='CVD (Volume Delta)')?.cls==='bear'?'DISTRIBUTION':'NEUTRAL',
+      why: result.reasons.cvd || '—',
+    },
+    // ── Sentiment ──
+    {
+      name:'Liquidation Sentiment',
+      val: result.reasons.liqSentiment?.match(/\$[\d.]+[MK]/)?.[0] ?? 'Low activity',
+      cls: result.factors.find(f=>f.name==='Liquidation Sentiment')?.cls || 'neut',
+      lbl: result.factors.find(f=>f.name==='Liquidation Sentiment')?.cls==='bull'?'OVERSOLD':result.factors.find(f=>f.name==='Liquidation Sentiment')?.cls==='bear'?'OVERBOUGHT':'NEUTRAL',
+      why: result.reasons.liqSentiment || '—',
+    },
+    {
+      name:'Fear & Greed',
+      val: fearGreedVal !== null ? `${fearGreedVal}/100` : '—',
+      cls: fearGreedVal!==null?(fearGreedVal<=35?'bull':fearGreedVal>=65?'bear':'neut'):'neut',
+      lbl: fearGreedVal!==null?(fearGreedVal<=20?'EXTREME FEAR':fearGreedVal<=35?'FEAR':fearGreedVal<=55?'NEUTRAL':fearGreedVal<=80?'GREED':'EXTREME GREED'):'NO DATA',
+      why: result.reasons.fearGreed || '—',
+    },
     // ── Microstructure cards ──
     {
       name:'Order Book Imbalance',
@@ -1149,7 +1293,8 @@ async function fetchTicker() {
 async function fetchKlines(interval='15m', limit=200) {
   const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
   const raw = await r.json();
-  return raw.map(k=>({open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5]}));
+  // k[9] = taker buy base volume — used for CVD
+  return raw.map(k=>({open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5],takerBuyVol:+k[9]}));
 }
 async function fetchOrderBook() {
   const r = await fetch('https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20');
@@ -1165,14 +1310,21 @@ async function fetchOpenInterest() {
   const d = await r.json();
   return d.openInterest ? +d.openInterest : null;
 }
+async function fetchFearGreed() {
+  const r = await fetch('https://api.alternative.me/fng/?limit=1');
+  const d = await r.json();
+  return d.data?.[0]?.value != null ? +d.data[0].value : null;
+}
 
 async function refresh() {
   document.getElementById('refresh-txt').innerHTML='<span class="spinner"></span> Updating…';
   try {
     // Order book comes from WebSocket (100ms), OI from 60s poll, funding from 5min poll
-    const [ticker, candles, c1m, liqs] = await Promise.all([
+    const [ticker, candles, c1m, liqs, c4h, c1d] = await Promise.all([
       fetchTicker(), fetchKlines('15m',200), fetchKlines('1m',120),
       fetchLiquidations().catch(()=>[]),
+      fetchKlines('4h', 60).catch(()=>[]),
+      fetchKlines('1d', 40).catch(()=>[]),
     ]);
 
     const price     = +ticker.lastPrice;
@@ -1220,10 +1372,35 @@ async function refresh() {
     const m1avgVol    = vol1m.slice(-21,-1).reduce((s,v)=>s+v,0)/20;
     const m1volTrend  = m1avgVol>0 ? m1recentVol/m1avgVol : 1;
 
+    // ── 4H higher timeframe indicators ──
+    let ema9_4h=null, ema21_4h=null, ema50_4h=null, structure4h='ranging';
+    if (c4h.length >= 50) {
+      const cl4h   = c4h.map(c=>c.close);
+      ema9_4h      = last(emaArray(cl4h, 9));
+      ema21_4h     = last(emaArray(cl4h, 21));
+      ema50_4h     = last(emaArray(cl4h, 50));
+      const {highs:ph4h, lows:pl4h} = findPivots(c4h, 3);
+      structure4h  = marketStructure(ph4h, pl4h);
+    }
+
+    // ── Daily higher timeframe indicators ──
+    let ema9_1d=null, ema21_1d=null, structure1d='ranging';
+    if (c1d.length >= 21) {
+      const cl1d   = c1d.map(c=>c.close);
+      ema9_1d      = last(emaArray(cl1d, 9));
+      ema21_1d     = last(emaArray(cl1d, 21));
+      const {highs:ph1d, lows:pl1d} = findPivots(c1d, 2);
+      structure1d  = marketStructure(ph1d, pl1d);
+    }
+
+    // ── CVD from 15m candles (taker buy vs sell volume) ──
+    const cvdSeries = cvdCalc(candles);
+
     // Use WebSocket-fed values (already updated at their proper frequencies)
-    const obImbalance = wsOBImbalance;
-    const fundingRate = wsFundingRate;
-    const oiDelta     = wsOIDelta;
+    const obImbalance  = wsOBImbalance;
+    const fundingRate  = wsFundingRate;
+    const oiDelta      = wsOIDelta;
+    const fearGreedVal = wsFearGreed;
 
     const d = {
       price, change24h, high24h, low24h, volume24h,
@@ -1231,8 +1408,15 @@ async function refresh() {
       macdData, bbData, atrVal, adxVal, obvSeries,
       volTrend, pivotHighs, pivotLows, candles,
       structure, srData, channel, pattern,
+      // higher timeframes
+      ema9_4h, ema21_4h, ema50_4h, structure4h,
+      ema9_1d, ema21_1d, structure1d,
+      // volume delta
+      cvdSeries,
       // microstructure
       obImbalance, fundingRate, oiDelta,
+      // sentiment
+      fearGreedVal, liqs,
       // 1m
       m1rsi, m1stochRsi, m1ema9, m1ema21, m1macd,
       m1volTrend, m1pattern, m1candles: c1m
@@ -1279,6 +1463,7 @@ let wsOBImbalance  = null;  // from @depth20@100ms  — order book
 let wsFundingRate  = null;  // from 5-min poll      — funding rate
 let wsOIDelta      = null;  // from 60-s poll        — OI delta
 let wsOI           = null;  // last OI snapshot
+let wsFearGreed    = null;  // from 30-min poll      — Fear & Greed (0-100)
 let wsConnected    = false; // for status dot
 let lastSRData  = null;
 let countdownTimer = null;
@@ -1690,12 +1875,18 @@ async function refreshFunding() {
   try { wsFundingRate = await fetchFundingRate(); } catch(_) {}
 }
 
+/* ── Fear & Greed Index — sampled every 30 min (updates once daily) ── */
+async function refreshFearGreed() {
+  try { wsFearGreed = await fetchFearGreed(); } catch(_) {}
+}
+
 refresh();
 setInterval(refresh, 5_000);
 
 initWebSocket();
-refreshOI();      setInterval(refreshOI,      60_000);
-refreshFunding(); setInterval(refreshFunding, 300_000);
+refreshOI();        setInterval(refreshOI,        60_000);
+refreshFunding();   setInterval(refreshFunding,   300_000);
+refreshFearGreed(); setInterval(refreshFearGreed, 1_800_000);
 </script>
 </body>
 </html>
