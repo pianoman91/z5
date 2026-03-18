@@ -141,7 +141,7 @@
     .liq-recent { display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto; }
 
     /* ── Trade amount input ── */
-    .trade-amount-row { display:flex;align-items:center;gap:10px;margin-top:14px;margin-bottom:6px;flex-wrap:wrap; }
+    .trade-amount-row { display:flex;align-items:center;gap:10px;margin-top:8px;margin-bottom:6px;flex-wrap:wrap; }
     .trade-amount-lbl { font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap; }
     .trade-amount-input { background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:8px 12px;font-size:14px;font-weight:700;width:130px;outline:none;transition:border-color .2s; }
     .trade-amount-input:focus { border-color:var(--accent); }
@@ -234,27 +234,6 @@
   </div>
 </div>
 
-<!-- market structure row -->
-<div class="ms-row" id="ms-row">
-  <div class="ms-card"><div class="ms-title">Market Structure</div><div class="ms-value" id="ms-struct">—</div><div class="ms-sub" id="ms-struct-sub">—</div></div>
-  <div class="ms-card"><div class="ms-title">Nearest Support</div><div class="ms-value up" id="ms-sup">—</div><div class="ms-sub" id="ms-sup-sub">—</div></div>
-  <div class="ms-card"><div class="ms-title">Nearest Resistance</div><div class="ms-value down" id="ms-res">—</div><div class="ms-sub" id="ms-res-sub">—</div></div>
-  <div class="ms-card"><div class="ms-title">Channel</div><div class="ms-value" id="ms-chan">—</div><div class="ms-sub" id="ms-chan-sub">—</div></div>
-  <div class="ms-card"><div class="ms-title">Breakout Status</div><div class="ms-value" id="ms-bo">—</div><div class="ms-sub" id="ms-bo-sub">—</div></div>
-  <div class="ms-card"><div class="ms-title">ADX · Trend Strength</div><div class="ms-value" id="ms-adx">—</div><div class="ms-sub" id="ms-adx-sub">—</div></div>
-</div>
-
-<!-- chart -->
-<div class="tf-row" id="tf-row">
-  <button class="tf-btn" data-tv="1">1m</button>
-  <button class="tf-btn" data-tv="5">5m</button>
-  <button class="tf-btn active" data-tv="15">15m</button>
-  <button class="tf-btn" data-tv="60">1H</button>
-  <button class="tf-btn" data-tv="240">4H</button>
-  <button class="tf-btn" data-tv="D">1D</button>
-</div>
-<div class="chart-wrap"><div id="tv-chart"></div></div>
-
 <!-- trade amount input -->
 <div class="trade-amount-row">
   <span class="trade-amount-lbl">Trade Amount (USD)</span>
@@ -295,6 +274,27 @@
   </div>
   <button class="pos-cancel" onclick="closePosition()">✕ Cancel</button>
 </div>
+
+<!-- market structure row -->
+<div class="ms-row" id="ms-row">
+  <div class="ms-card"><div class="ms-title">Market Structure</div><div class="ms-value" id="ms-struct">—</div><div class="ms-sub" id="ms-struct-sub">—</div></div>
+  <div class="ms-card"><div class="ms-title">Nearest Support</div><div class="ms-value up" id="ms-sup">—</div><div class="ms-sub" id="ms-sup-sub">—</div></div>
+  <div class="ms-card"><div class="ms-title">Nearest Resistance</div><div class="ms-value down" id="ms-res">—</div><div class="ms-sub" id="ms-res-sub">—</div></div>
+  <div class="ms-card"><div class="ms-title">Channel</div><div class="ms-value" id="ms-chan">—</div><div class="ms-sub" id="ms-chan-sub">—</div></div>
+  <div class="ms-card"><div class="ms-title">Breakout Status</div><div class="ms-value" id="ms-bo">—</div><div class="ms-sub" id="ms-bo-sub">—</div></div>
+  <div class="ms-card"><div class="ms-title">ADX · Trend Strength</div><div class="ms-value" id="ms-adx">—</div><div class="ms-sub" id="ms-adx-sub">—</div></div>
+</div>
+
+<!-- chart -->
+<div class="tf-row" id="tf-row">
+  <button class="tf-btn" data-tv="1">1m</button>
+  <button class="tf-btn" data-tv="5">5m</button>
+  <button class="tf-btn active" data-tv="15">15m</button>
+  <button class="tf-btn" data-tv="60">1H</button>
+  <button class="tf-btn" data-tv="240">4H</button>
+  <button class="tf-btn" data-tv="D">1D</button>
+</div>
+<div class="chart-wrap"><div id="tv-chart"></div></div>
 
 <!-- paper trade stats -->
 <div class="paper-panel" id="paper-panel" style="display:none">  <div class="paper-header">
