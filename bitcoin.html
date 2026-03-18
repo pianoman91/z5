@@ -1169,12 +1169,10 @@ async function fetchOpenInterest() {
 async function refresh() {
   document.getElementById('refresh-txt').innerHTML='<span class="spinner"></span> Updating…';
   try {
-    const [ticker, candles, c1m, liqs, orderBook, fundingRate, openInterest] = await Promise.all([
+    // Order book comes from WebSocket (100ms), OI from 60s poll, funding from 5min poll
+    const [ticker, candles, c1m, liqs] = await Promise.all([
       fetchTicker(), fetchKlines('15m',200), fetchKlines('1m',120),
       fetchLiquidations().catch(()=>[]),
-      fetchOrderBook().catch(()=>null),
-      fetchFundingRate().catch(()=>null),
-      fetchOpenInterest().catch(()=>null),
     ]);
 
     const price     = +ticker.lastPrice;
@@ -1222,20 +1220,10 @@ async function refresh() {
     const m1avgVol    = vol1m.slice(-21,-1).reduce((s,v)=>s+v,0)/20;
     const m1volTrend  = m1avgVol>0 ? m1recentVol/m1avgVol : 1;
 
-    // ── Order book imbalance (bid volume vs ask volume, top 10 levels) ──
-    let obImbalance = null;
-    if (orderBook) {
-      const bidVol = orderBook.bids.slice(0,10).reduce((s,[,q])=>s+ +q, 0);
-      const askVol = orderBook.asks.slice(0,10).reduce((s,[,q])=>s+ +q, 0);
-      obImbalance  = (bidVol + askVol) > 0 ? (bidVol - askVol) / (bidVol + askVol) : null;
-    }
-
-    // ── OI delta: compare current snapshot to last refresh ──
-    let oiDelta = null;
-    if (openInterest !== null && lastOI !== null && lastOI > 0) {
-      oiDelta = (openInterest - lastOI) / lastOI; // fractional change
-    }
-    if (openInterest !== null) lastOI = openInterest;
+    // Use WebSocket-fed values (already updated at their proper frequencies)
+    const obImbalance = wsOBImbalance;
+    const fundingRate = wsFundingRate;
+    const oiDelta     = wsOIDelta;
 
     const d = {
       price, change24h, high24h, low24h, volume24h,
@@ -1281,10 +1269,17 @@ let position      = null; // { type, entryPrice, entryTime, tp, sl, countdownEnd
 let lastPrice     = null;
 let lastScore     = 0;
 let lastATR       = null;
-let lastOI        = null; // previous open interest snapshot for delta
+let lastOI        = null; // previous open interest snapshot for delta (60s interval)
 let lastConfidence = 0;
 let lastRegime    = 'neutral';
 let lastCandles1m = null; // kept for realized vol countdown
+
+/* WebSocket-fed real-time values (sub-second) */
+let wsOBImbalance  = null;  // from @depth20@100ms  — order book
+let wsFundingRate  = null;  // from 5-min poll      — funding rate
+let wsOIDelta      = null;  // from 60-s poll        — OI delta
+let wsOI           = null;  // last OI snapshot
+let wsConnected    = false; // for status dot
 let lastSRData  = null;
 let countdownTimer = null;
 
@@ -1621,8 +1616,86 @@ function renderPaperStats() {
   }).join('');
 }
 
+/* ═══════════════════════════════════════════════════
+   WEBSOCKET — real-time price + order book (sub-second)
+═══════════════════════════════════════════════════ */
+function initWebSocket() {
+  const ws = new WebSocket(
+    'wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/btcusdt@depth20@100ms'
+  );
+
+  ws.onopen = () => {
+    wsConnected = true;
+    document.getElementById('refresh-badge').style.borderColor = 'var(--green)';
+  };
+
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.stream === 'btcusdt@ticker') {
+      const t   = msg.data;
+      lastPrice = +t.c;
+      // Real-time price card (no full indicator recompute needed)
+      const el = document.getElementById('p-price');
+      if (el) el.textContent = '$' + Number(lastPrice).toLocaleString('en-US',
+        {minimumFractionDigits:2, maximumFractionDigits:2});
+      // Real-time change colour
+      const chEl = document.getElementById('p-change');
+      const ch   = +t.P;
+      if (chEl) { chEl.textContent = `${ch>=0?'+':''}${ch.toFixed(2)}%`; chEl.className='value '+(ch>=0?'up':'down'); }
+      // Real-time P&L in position panel
+      if (position) {
+        const isLong = position.type === 'long';
+        const raw    = isLong
+          ? (lastPrice - position.entryPrice) / position.entryPrice * 100
+          : (position.entryPrice - lastPrice) / position.entryPrice * 100;
+        const pnlEl = document.getElementById('pos-pnl');
+        if (pnlEl) pnlEl.innerHTML =
+          `<span style="color:${raw>=0?'var(--green)':'var(--red)'}">${raw>=0?'+':''}${raw.toFixed(3)}%</span>`;
+        const curEl = document.getElementById('pos-current');
+        if (curEl) curEl.textContent = fmt2d(lastPrice);
+      }
+    }
+
+    if (msg.stream && msg.stream.includes('depth')) {
+      const ob  = msg.data;
+      const bV  = ob.bids.slice(0,10).reduce((s,[,q])=>s+ +q, 0);
+      const aV  = ob.asks.slice(0,10).reduce((s,[,q])=>s+ +q, 0);
+      wsOBImbalance = (bV + aV) > 0 ? (bV - aV) / (bV + aV) : null;
+    }
+  };
+
+  ws.onclose = () => {
+    wsConnected = false;
+    document.getElementById('refresh-badge').style.borderColor = 'var(--border)';
+    setTimeout(initWebSocket, 3_000); // auto-reconnect
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+/* ── OI delta — sampled every 60 s (5 s was pure noise) ── */
+async function refreshOI() {
+  try {
+    const oi = await fetchOpenInterest();
+    if (oi !== null) {
+      if (wsOI !== null && wsOI > 0) wsOIDelta = (oi - wsOI) / wsOI;
+      wsOI = oi;
+    }
+  } catch(_) {}
+}
+
+/* ── Funding rate — sampled every 5 min (changes every 8 h) ── */
+async function refreshFunding() {
+  try { wsFundingRate = await fetchFundingRate(); } catch(_) {}
+}
+
 refresh();
 setInterval(refresh, 5_000);
+
+initWebSocket();
+refreshOI();      setInterval(refreshOI,      60_000);
+refreshFunding(); setInterval(refreshFunding, 300_000);
 </script>
 </body>
 </html>
