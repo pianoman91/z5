@@ -186,6 +186,44 @@
     @keyframes flash { 0%,100%{opacity:1} 50%{opacity:.6} }
     .pos-cancel { background:transparent;border:1px solid var(--border);color:var(--muted);padding:7px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;transition:all .2s; }
     .pos-cancel:hover { border-color:var(--red);color:var(--red); }
+
+    /* ── Backtest Panel ── */
+    .bt-panel { background:var(--surface);border:1px solid #4a9eff55;border-radius:var(--r);padding:20px 24px;margin-bottom:14px; }
+    .bt-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:16px; }
+    .bt-title { font-size:14px;font-weight:800;color:var(--blue);letter-spacing:.4px; }
+    .bt-subtitle { font-size:11px;color:var(--muted);margin-top:2px; }
+    .bt-controls { display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px;align-items:flex-end; }
+    .bt-ctrl { display:flex;flex-direction:column;gap:4px; }
+    .bt-lbl { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px; }
+    .bt-input { background:var(--sur2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:8px 12px;font-size:13px;outline:none;transition:border-color .2s; }
+    .bt-input:focus { border-color:var(--blue); }
+    .bt-run { background:var(--blue);color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .2s;white-space:nowrap;align-self:flex-end; }
+    .bt-run:hover { opacity:.85; }
+    .bt-run:disabled { opacity:.4;cursor:not-allowed; }
+    .bt-progress { margin-bottom:14px; }
+    .bt-prog-txt { font-size:12px;color:var(--muted);margin-bottom:6px; }
+    .bt-prog-bar { height:6px;background:var(--sur2);border-radius:3px;overflow:hidden; }
+    .bt-prog-fill { height:100%;background:var(--blue);border-radius:3px;transition:width .4s; }
+    .bt-results { }
+    .bt-stat-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:16px; }
+    .bt-stat { background:var(--sur2);border-radius:8px;padding:12px 14px; }
+    .bt-stat-lbl { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px; }
+    .bt-stat-val { font-size:20px;font-weight:800; }
+    .bt-section-title { font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin:14px 0 8px; }
+    .bt-regime-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;margin-bottom:16px; }
+    .bt-regime-card { background:var(--sur2);border-radius:8px;padding:10px 14px; }
+    .bt-regime-name { font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px; }
+    .bt-regime-stats { font-size:12px;color:var(--muted);line-height:1.7; }
+    .bt-log { max-height:340px;overflow-y:auto;border-radius:8px;border:1px solid var(--border); }
+    .bt-log-table { width:100%;border-collapse:collapse;font-size:12px; }
+    .bt-log-table th { position:sticky;top:0;background:var(--sur2);padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap; }
+    .bt-log-table td { padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap; }
+    .bt-log-table tr:last-child td { border-bottom:none; }
+    .bt-log-table tr:hover td { background:rgba(255,255,255,.02); }
+    .bt-pnl-pos { color:var(--green);font-weight:700; }
+    .bt-pnl-neg { color:var(--red);font-weight:700; }
+    .bt-pnl-neu { color:var(--muted);font-weight:700; }
+    .bt-note { font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6; }
   </style>
 </head>
 <body>
@@ -336,6 +374,56 @@
 
 <!-- indicators -->
 <div class="ind-grid" id="ind-grid"></div>
+
+<!-- ── Backtest Panel ── -->
+<div class="bt-panel" id="bt-panel">
+  <div class="bt-header">
+    <div>
+      <div class="bt-title">📊 BACKTEST — Algorithm Historical Performance</div>
+      <div class="bt-subtitle">Runs the exact same signal engine on historical Binance data · No microstructure (OB/Funding/OI) · 15m + 4H + 1D</div>
+    </div>
+  </div>
+  <div class="bt-controls">
+    <div class="bt-ctrl">
+      <span class="bt-lbl">Start Date</span>
+      <input class="bt-input" type="date" id="bt-start" style="width:150px">
+    </div>
+    <div class="bt-ctrl">
+      <span class="bt-lbl">End Date</span>
+      <input class="bt-input" type="date" id="bt-end" style="width:150px">
+    </div>
+    <div class="bt-ctrl">
+      <span class="bt-lbl">Min Confidence %</span>
+      <input class="bt-input" type="number" id="bt-conf" value="65" min="51" max="98" style="width:95px">
+    </div>
+    <div class="bt-ctrl">
+      <span class="bt-lbl">Trade Amount $</span>
+      <input class="bt-input" type="number" id="bt-amount" value="1000" min="1" style="width:115px">
+    </div>
+    <button class="bt-run" id="bt-run-btn" onclick="runBacktest()">▶ Run Backtest</button>
+  </div>
+  <div class="bt-progress" id="bt-progress" style="display:none">
+    <div class="bt-prog-txt" id="bt-prog-txt">Initialising…</div>
+    <div class="bt-prog-bar"><div class="bt-prog-fill" id="bt-prog-fill" style="width:0%"></div></div>
+  </div>
+  <div id="bt-results" style="display:none">
+    <div class="bt-stat-grid" id="bt-stat-grid"></div>
+    <div class="bt-section-title">Performance by Market Regime</div>
+    <div class="bt-regime-grid" id="bt-regime-grid"></div>
+    <div class="bt-section-title">Trade Log <span id="bt-log-meta" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)"></span></div>
+    <div class="bt-log">
+      <table class="bt-log-table">
+        <thead><tr>
+          <th>#</th><th>Dir</th><th>Opened</th><th>Entry</th><th>Exit</th>
+          <th>TP</th><th>SL</th><th>Result</th><th>Net P&amp;L</th>
+          <th>Bars</th><th>Regime</th><th>Conf</th>
+        </tr></thead>
+        <tbody id="bt-log-body"></tbody>
+      </table>
+    </div>
+    <p class="bt-note">⚠ Backtest limitations: no microstructure inputs (order book / funding rate / OI delta / Fear &amp; Greed / 1m scalp) — those 6 factors contribute ~43% of the live signal weight and are not available historically. Results show algorithm structural + momentum + volume accuracy only. Past performance does not guarantee future results.</p>
+  </div>
+</div>
 
 <div class="footer">Data: Binance REST API (200×15m + 120×1m candles) · Chart: TradingView · Auto-refresh every 5s · Not financial advice</div>
 
@@ -1962,6 +2050,354 @@ initWebSocket();
 refreshOI();        setInterval(refreshOI,        60_000);
 refreshFunding();   setInterval(refreshFunding,   300_000);
 refreshFearGreed(); setInterval(refreshFearGreed, 1_800_000);
+
+/* ═══════════════════════════════════════════════════
+   BACKTEST ENGINE
+═══════════════════════════════════════════════════ */
+
+/* Set default date range: last 90 days → today */
+(function initBtDates() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const toISO = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const start = new Date(now); start.setDate(now.getDate() - 90);
+  document.getElementById('bt-start').value = toISO(start);
+  document.getElementById('bt-end').value   = toISO(now);
+})();
+
+/* Paginated historical klines — fetches all candles in range */
+async function fetchKlinesHistory(interval, startMs, endMs) {
+  const all = [];
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&startTime=${cursor}&endTime=${endMs}&limit=1000`;
+    const r   = await fetch(url);
+    const raw = await r.json();
+    if (!Array.isArray(raw) || !raw.length) break;
+    for (const k of raw) {
+      all.push({ openTime:+k[0], closeTime:+k[6], open:+k[1], high:+k[2], low:+k[3], close:+k[4], volume:+k[5], takerBuyVol:+k[9] });
+    }
+    cursor = +raw[raw.length-1][6] + 1;
+    if (raw.length < 1000) break;
+    await new Promise(r => setTimeout(r, 80)); // stay under rate limit
+  }
+  return all;
+}
+
+/* Build the `d` object that computeSignal() expects, from a candle window */
+function btBuildData(win15m, win4h, win1d) {
+  const closes = win15m.map(c => c.close);
+  const price  = last(closes);
+
+  const rsiArr      = rsiSeries(closes);
+  const rsiVal      = rsiArr.length ? last(rsiArr) : null;
+  const stochRsiVal = stochRsi(closes);
+  const e9          = emaArray(closes, 9);
+  const e21         = emaArray(closes, 21);
+  const e50         = emaArray(closes, 50);
+  const ema9 = last(e9), ema21 = last(e21), ema50 = last(e50);
+  const macdData    = macdCalc(closes);
+  const bbData      = bbCalc(closes);
+  const atrVal      = atrCalc(win15m);
+  const adxVal      = adxCalc(win15m);
+  const obvSeries   = obvCalc(win15m);
+  const cvdSeries   = cvdCalc(win15m);
+
+  const vols   = win15m.map(c => c.volume);
+  const slice20 = vols.slice(-21, -1);
+  const avgVol = slice20.length ? slice20.reduce((s,v)=>s+v,0)/slice20.length : 1;
+  const volTrend = avgVol > 0 ? last(vols)/avgVol : 1;
+
+  const price24h  = win15m.length >= 97 ? win15m[win15m.length-97].close : win15m[0].close;
+  const change24h = ((price - price24h) / price24h) * 100;
+
+  const { highs: pivotHighs, lows: pivotLows } = findPivots(win15m);
+  const structure = marketStructure(pivotHighs, pivotLows);
+  const srData    = atrVal ? findSR(pivotHighs, pivotLows, price, atrVal) : null;
+  const channel   = detectChannel(pivotHighs, pivotLows);
+  const pattern   = candlePattern(win15m);
+
+  let ema9_4h=null, ema21_4h=null, ema50_4h=null, structure4h='ranging';
+  if (win4h.length >= 50) {
+    const c4 = win4h.map(c=>c.close);
+    ema9_4h  = last(emaArray(c4, 9));
+    ema21_4h = last(emaArray(c4, 21));
+    ema50_4h = last(emaArray(c4, 50));
+    const p4 = findPivots(win4h);
+    structure4h = marketStructure(p4.highs, p4.lows);
+  }
+
+  let ema9_1d=null, ema21_1d=null, structure1d='ranging';
+  if (win1d.length >= 21) {
+    const c1 = win1d.map(c=>c.close);
+    ema9_1d  = last(emaArray(c1, 9));
+    ema21_1d = last(emaArray(c1, 21));
+    const p1 = findPivots(win1d);
+    structure1d = marketStructure(p1.highs, p1.lows);
+  }
+
+  return {
+    price, rsiVal, stochRsiVal, ema9, ema21, ema50,
+    macdData, bbData, atrVal, adxVal, obvSeries,
+    volTrend, change24h, pivotHighs, pivotLows,
+    candles: win15m, srData, structure, channel, pattern,
+    ema9_4h, ema21_4h, ema50_4h, structure4h,
+    ema9_1d, ema21_1d, structure1d,
+    cvdSeries,
+    liqs: [], fearGreedVal: null,
+    obImbalance: null, fundingRate: null, oiDelta: null,
+    m1rsi: null, m1stochRsi: null, m1ema9: null, m1ema21: null,
+    m1macd: null, m1volTrend: null, m1pattern: null, m1candles: null,
+  };
+}
+
+/* TP/SL from ATR + SR, no globals */
+function btComputeTPSL(type, entry, atr, srData) {
+  let tp, sl;
+  if (type === 'long') {
+    const res = srData?.res?.price;
+    tp = (res && res > entry && res - entry < atr * 3) ? res : entry + 2 * atr;
+    const sup = srData?.sup?.price;
+    sl = (sup && sup < entry && entry - sup < atr * 2) ? sup : entry - 1.2 * atr;
+  } else {
+    const sup = srData?.sup?.price;
+    tp = (sup && sup < entry && entry - sup < atr * 3) ? sup : entry - 2 * atr;
+    const res = srData?.res?.price;
+    sl = (res && res > entry && res - entry < atr * 2) ? res : entry + 1.2 * atr;
+  }
+  return { tp, sl };
+}
+
+function btSetProgress(txt, pct) {
+  document.getElementById('bt-prog-txt').textContent = txt;
+  document.getElementById('bt-prog-fill').style.width = Math.min(100, pct) + '%';
+}
+
+/* ── Main backtest orchestrator ── */
+async function runBacktest() {
+  const btn = document.getElementById('bt-run-btn');
+  btn.disabled = true;
+  document.getElementById('bt-progress').style.display = '';
+  document.getElementById('bt-results').style.display  = 'none';
+
+  try {
+    const startDate = document.getElementById('bt-start').value;
+    const endDate   = document.getElementById('bt-end').value;
+    const minConf   = Math.max(51, Math.min(98, +document.getElementById('bt-conf').value || 65));
+    const tradeAmt  = Math.max(1, +document.getElementById('bt-amount').value || 1000);
+
+    if (!startDate || !endDate || startDate >= endDate) {
+      alert('Please enter a valid date range (start < end).');
+      btn.disabled = false; return;
+    }
+    const startMs  = new Date(startDate + 'T00:00:00Z').getTime();
+    const endMs    = new Date(endDate   + 'T23:59:59Z').getTime();
+    const dayRange = (endMs - startMs) / 86_400_000;
+    if (dayRange > 180) { alert('Maximum 180 days to avoid browser memory limits.'); btn.disabled = false; return; }
+
+    /* Fetch with warmup padding */
+    const w15m = 200 * 15 * 60_000;      // 200 × 15m = 50h
+    const w4h  = 200 * 4  * 3_600_000;   // 200 × 4h  = 33 days
+    const w1d  = 100 * 86_400_000;        // 100 days
+
+    btSetProgress('Fetching 15m candles…', 5);
+    const raw15m = await fetchKlinesHistory('15m', startMs - w15m, endMs);
+
+    btSetProgress('Fetching 4H candles…', 30);
+    const raw4h  = await fetchKlinesHistory('4h',  startMs - w4h,  endMs);
+
+    btSetProgress('Fetching 1D candles…', 50);
+    const raw1d  = await fetchKlinesHistory('1d',  startMs - w1d,  endMs);
+
+    if (!raw15m.length) { alert('No 15m candle data returned. Check date range.'); btn.disabled = false; return; }
+
+    /* Find simulation start (first bar at/after startMs) */
+    const simStart = raw15m.findIndex(c => c.openTime >= startMs);
+    if (simStart < 100) { alert('Not enough warmup data before start date. Try a later start.'); btn.disabled = false; return; }
+
+    btSetProgress(`Running signal engine on ${raw15m.length - simStart} bars…`, 60);
+    await new Promise(r => setTimeout(r, 20));
+
+    const trades = [];
+    let cumPnl = 0, peakPnl = 0, maxDrawdown = 0;
+    let position = null;
+    let ptr4h = 0, ptr1d = 0;
+    const total = raw15m.length - simStart;
+    let lastProgPct = 60;
+
+    for (let i = simStart; i < raw15m.length; i++) {
+      const bar = raw15m[i];
+
+      /* Advance pointers: last completed 4H/1D bar before this bar opens */
+      while (ptr4h + 1 < raw4h.length && raw4h[ptr4h+1].closeTime < bar.openTime) ptr4h++;
+      while (ptr1d + 1 < raw1d.length && raw1d[ptr1d+1].closeTime < bar.openTime) ptr1d++;
+
+      /* ── Exit check ── */
+      if (position) {
+        let exitPrice = null, exitResult = null;
+        if (position.type === 'LONG') {
+          const slHit = bar.low  <= position.sl;
+          const tpHit = bar.high >= position.tp;
+          if (slHit && tpHit) { exitPrice = position.sl; exitResult = 'SL'; } // conservative: SL first
+          else if (slHit)     { exitPrice = position.sl; exitResult = 'SL'; }
+          else if (tpHit)     { exitPrice = position.tp; exitResult = 'TP'; }
+        } else {
+          const slHit = bar.high >= position.sl;
+          const tpHit = bar.low  <= position.tp;
+          if (slHit && tpHit) { exitPrice = position.sl; exitResult = 'SL'; }
+          else if (slHit)     { exitPrice = position.sl; exitResult = 'SL'; }
+          else if (tpHit)     { exitPrice = position.tp; exitResult = 'TP'; }
+        }
+        /* Timeout: max 48 bars (12 h) */
+        if (!exitResult && i - position.barIdx >= 48) { exitPrice = bar.close; exitResult = 'TIMEOUT'; }
+
+        if (exitResult) {
+          const dir  = position.type === 'LONG' ? 1 : -1;
+          const pnl  = dir * (exitPrice - position.entry) / position.entry * tradeAmt - tradeAmt * FEE_RT;
+          cumPnl += pnl;
+          if (cumPnl > peakPnl) peakPnl = cumPnl;
+          if (peakPnl - cumPnl > maxDrawdown) maxDrawdown = peakPnl - cumPnl;
+          trades.push({ idx: trades.length+1, type: position.type, result: exitResult,
+            entry: position.entry, exit: exitPrice, tp: position.tp, sl: position.sl,
+            openTime: position.openTime, closeTime: bar.openTime,
+            pnl, duration: i - position.barIdx,
+            confidence: position.confidence, regime: position.regime });
+          position = null;
+        }
+      }
+
+      /* ── Entry check (only when flat) ── */
+      if (!position) {
+        const win15 = raw15m.slice(Math.max(0, i - 199), i + 1);
+        const win4h = raw4h.slice(Math.max(0, ptr4h - 199), ptr4h + 1);
+        const win1d = raw1d.slice(Math.max(0, ptr1d - 99),  ptr1d + 1);
+
+        const d   = btBuildData(win15, win4h, win1d);
+        const sig = computeSignal(d);
+
+        if (sig.signal !== 'HOLD' && sig.confidence >= minConf) {
+          const entry = bar.close;
+          const atr   = d.atrVal || entry * 0.01;
+          const { tp, sl } = btComputeTPSL(sig.signal === 'LONG' ? 'long' : 'short', entry, atr, d.srData);
+          position = { type: sig.signal, entry, tp, sl, openTime: bar.openTime, barIdx: i,
+                       confidence: sig.confidence, regime: sig.regime };
+        }
+      }
+
+      /* UI progress pulse every 250 bars */
+      if ((i - simStart) % 250 === 0) {
+        const pct = Math.round(60 + ((i - simStart) / total) * 34);
+        if (pct !== lastProgPct) {
+          btSetProgress(`Signal engine: ${i - simStart + 1} / ${total} bars…`, pct);
+          lastProgPct = pct;
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+    }
+
+    /* Close any open position at last bar */
+    if (position) {
+      const lb  = raw15m[raw15m.length - 1];
+      const dir = position.type === 'LONG' ? 1 : -1;
+      const pnl = dir * (lb.close - position.entry) / position.entry * tradeAmt - tradeAmt * FEE_RT;
+      cumPnl += pnl;
+      trades.push({ idx: trades.length+1, type: position.type, result: 'OPEN',
+        entry: position.entry, exit: lb.close, tp: position.tp, sl: position.sl,
+        openTime: position.openTime, closeTime: lb.openTime,
+        pnl, duration: raw15m.length - 1 - position.barIdx,
+        confidence: position.confidence, regime: position.regime });
+    }
+
+    btSetProgress('Rendering results…', 97);
+    await new Promise(r => setTimeout(r, 10));
+    btRenderResults({ trades, cumPnl, maxDrawdown, tradeAmt, minConf, startDate, endDate });
+    btSetProgress('Done ✓', 100);
+    document.getElementById('bt-results').style.display = '';
+
+  } catch (err) {
+    btSetProgress('Error: ' + err.message, 0);
+    console.error('[backtest]', err);
+  }
+  btn.disabled = false;
+}
+
+/* ── Results renderer ── */
+function btRenderResults({ trades, cumPnl, maxDrawdown, tradeAmt, minConf, startDate, endDate }) {
+  const wins   = trades.filter(t => t.pnl > 0);
+  const losses = trades.filter(t => t.pnl <= 0);
+  const winRate = trades.length ? wins.length / trades.length * 100 : 0;
+  const avgWin  = wins.length   ? wins.reduce((s,t)=>s+t.pnl,0)/wins.length     : 0;
+  const avgLoss = losses.length ? losses.reduce((s,t)=>s+t.pnl,0)/losses.length : 0;
+  const grossWin  = wins.reduce((s,t)=>s+t.pnl,0);
+  const grossLoss = Math.abs(losses.reduce((s,t)=>s+t.pnl,0));
+  const pf = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 9.99 : 0;
+  const deployed = trades.length * tradeAmt;
+  const retPct   = deployed > 0 ? cumPnl / deployed * 100 : 0;
+  // Max consecutive losses
+  let maxStreak = 0, streak = 0;
+  for (const t of trades) { t.pnl <= 0 ? (streak++, maxStreak = Math.max(maxStreak, streak)) : (streak = 0); }
+
+  const col = v => v >= 0 ? 'var(--green)' : 'var(--red)';
+  const stats = [
+    { lbl:'Total P&L',         val:`${cumPnl>=0?'+':''}$${cumPnl.toFixed(2)}`,      c: col(cumPnl) },
+    { lbl:'ROC',               val:`${retPct>=0?'+':''}${retPct.toFixed(1)}%`,       c: col(retPct) },
+    { lbl:'Trades',            val: trades.length,                                   c:'var(--text)' },
+    { lbl:'Win Rate',          val:`${winRate.toFixed(1)}%`,                         c: winRate>=50?'var(--green)':'var(--red)' },
+    { lbl:'Avg Win',           val:`+$${avgWin.toFixed(2)}`,                         c:'var(--green)' },
+    { lbl:'Avg Loss',          val:`$${avgLoss.toFixed(2)}`,                         c:'var(--red)' },
+    { lbl:'Profit Factor',     val: pf >= 9.99 ? '∞' : pf.toFixed(2),               c: pf>=1.5?'var(--green)':pf>=1?'var(--yellow)':'var(--red)' },
+    { lbl:'Max Drawdown',      val:`-$${maxDrawdown.toFixed(2)}`,                    c:'var(--red)' },
+    { lbl:'TP Exits',          val: trades.filter(t=>t.result==='TP').length,        c:'var(--green)' },
+    { lbl:'SL Exits',          val: trades.filter(t=>t.result==='SL').length,        c:'var(--red)' },
+    { lbl:'Timeouts',          val: trades.filter(t=>t.result==='TIMEOUT').length,   c:'var(--muted)' },
+    { lbl:'Max Loss Streak',   val: maxStreak,                                       c: maxStreak>=5?'var(--red)':'var(--muted)' },
+  ];
+  document.getElementById('bt-stat-grid').innerHTML = stats.map(s =>
+    `<div class="bt-stat"><div class="bt-stat-lbl">${s.lbl}</div><div class="bt-stat-val" style="color:${s.c}">${s.val}</div></div>`
+  ).join('');
+
+  /* Regime breakdown */
+  const regimeColor = { trending:'var(--green)', ranging:'var(--yellow)', volatile:'var(--red)', neutral:'var(--muted)' };
+  document.getElementById('bt-regime-grid').innerHTML = ['trending','ranging','volatile','neutral'].map(reg => {
+    const rt = trades.filter(t=>t.regime===reg);
+    if (!rt.length) return `<div class="bt-regime-card"><div class="bt-regime-name" style="color:${regimeColor[reg]}">${reg.toUpperCase()}</div><div class="bt-regime-stats">No trades</div></div>`;
+    const rw  = rt.filter(t=>t.pnl>0);
+    const rPnl= rt.reduce((s,t)=>s+t.pnl,0);
+    const rWR = (rw.length/rt.length*100).toFixed(0);
+    return `<div class="bt-regime-card">
+      <div class="bt-regime-name" style="color:${regimeColor[reg]}">${reg.toUpperCase()}</div>
+      <div class="bt-regime-stats">
+        ${rt.length} trades<br>
+        Win rate: <span style="color:${+rWR>=50?'var(--green)':'var(--red)'}">${rWR}%</span><br>
+        P&L: <span style="color:${rPnl>=0?'var(--green)':'var(--red)'}">${rPnl>=0?'+':''}$${rPnl.toFixed(2)}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  /* Trade log */
+  document.getElementById('bt-log-meta').textContent =
+    `${trades.length} trades · ${startDate} → ${endDate} · min conf ${minConf}%`;
+  const fmtDt = ts => { const d=new Date(ts); return d.toISOString().replace('T',' ').slice(0,16); };
+  document.getElementById('bt-log-body').innerHTML = [...trades].reverse().map(t => {
+    const pCls = t.pnl>0?'bt-pnl-pos':t.pnl<0?'bt-pnl-neg':'bt-pnl-neu';
+    const resBadge = { TP:'<b style="color:var(--green)">TP</b>', SL:'<b style="color:var(--red)">SL</b>', TIMEOUT:'<span style="color:var(--muted)">TIMEOUT</span>', OPEN:'<span style="color:var(--yellow)">OPEN</span>' }[t.result]||t.result;
+    const dirBadge = t.type==='LONG'?'<b style="color:var(--green)">▲ LONG</b>':'<b style="color:var(--red)">▼ SHORT</b>';
+    return `<tr>
+      <td style="color:var(--muted)">${t.idx}</td>
+      <td>${dirBadge}</td>
+      <td style="color:var(--muted)">${fmtDt(t.openTime)}</td>
+      <td>$${t.entry.toLocaleString('en',{maximumFractionDigits:0})}</td>
+      <td>$${t.exit.toLocaleString('en',{maximumFractionDigits:0})}</td>
+      <td style="color:var(--green)">$${t.tp.toLocaleString('en',{maximumFractionDigits:0})}</td>
+      <td style="color:var(--red)">$${t.sl.toLocaleString('en',{maximumFractionDigits:0})}</td>
+      <td>${resBadge}</td>
+      <td class="${pCls}">${t.pnl>=0?'+':''}$${t.pnl.toFixed(2)}</td>
+      <td style="color:var(--muted)">${t.duration}×15m</td>
+      <td style="font-size:11px;color:var(--muted)">${t.regime}</td>
+      <td style="font-size:11px;color:var(--muted)">${t.confidence}%</td>
+    </tr>`;
+  }).join('');
+}
 </script>
 </body>
 </html>
