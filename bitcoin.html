@@ -2384,6 +2384,10 @@ async function runBacktest() {
           const entry = bar.close;
           const atr   = d.atrVal || entry * 0.01;
           const { tp, sl } = btComputeTPSL(sig.signal === 'LONG' ? 'long' : 'short', entry, atr, d.srData);
+          /* Enforce minimum 1.5:1 R:R — skip if TP/SL placement doesn't meet the bar */
+          const tpDist = Math.abs(tp - entry);
+          const slDist = Math.abs(sl - entry);
+          if (slDist === 0 || tpDist / slDist < 1.5) continue;
           position = { type: sig.signal, entry, tp, sl, openTime: bar.openTime, barIdx: i,
                        confidence: sig.confidence, regime: sig.regime };
         }
