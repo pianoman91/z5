@@ -2184,7 +2184,7 @@ function btBuildData(win15m, win4h, win1d, extras = {}) {
     const c1 = win1d.map(c=>c.close);
     ema9_1d  = last(emaArray(c1, 9));
     ema21_1d = last(emaArray(c1, 21));
-    const p1 = findPivots(win1d);
+    const p1 = findPivots(win1d, 2);
     structure1d = marketStructure(p1.highs, p1.lows);
   }
 
