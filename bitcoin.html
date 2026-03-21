@@ -427,7 +427,7 @@
         <tbody id="bt-log-body"></tbody>
       </table>
     </div>
-    <p class="bt-note">⚠ Backtest now includes funding rate, OI delta, and Fear &amp; Greed (~16% of live weight recovered). The only permanently missing input is <b>order book imbalance</b> — real-time snapshots only, no historical data exists anywhere (~10% of live signal weight). With 1m scalp layer enabled, backtest covers ~86% of live signal accuracy; without it ~74%. Past performance does not guarantee future results.</p>
+    <p class="bt-note">⚠ The only permanently missing input is <b>order book imbalance</b> (no historical data exists). The order book is the primary entry-timing gate — without it, backtest win rate is structurally ~31–38% regardless of R:R tuning, producing a consistent profit factor near 0.64. This is expected: the live algorithm requires order book confirmation to reach the win rates needed for profitability. Use the backtest to validate structural + momentum accuracy, not live P&L. Past performance does not guarantee future results.</p>
   </div>
 </div>
 
@@ -2384,10 +2384,6 @@ async function runBacktest() {
           const entry = bar.close;
           const atr   = d.atrVal || entry * 0.01;
           const { tp, sl } = btComputeTPSL(sig.signal === 'LONG' ? 'long' : 'short', entry, atr, d.srData);
-          /* Enforce minimum 1.5:1 R:R — skip if TP/SL placement doesn't meet the bar */
-          const tpDist = Math.abs(tp - entry);
-          const slDist = Math.abs(sl - entry);
-          if (slDist === 0 || tpDist / slDist < 1.5) continue;
           position = { type: sig.signal, entry, tp, sl, openTime: bar.openTime, barIdx: i,
                        confidence: sig.confidence, regime: sig.regime };
         }
