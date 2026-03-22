@@ -1617,19 +1617,17 @@ function computeTPSL(type, entry) {
   let tp, sl;
 
   if (type === 'long') {
-    // TP = nearest resistance above entry (if within 3 ATR), else entry + 2*ATR
-    const res = sr?.res?.price;
-    tp = (res && res > entry && res - entry < atr * 3) ? res : entry + 2 * atr;
     // SL = nearest support below entry (if within 2 ATR), else entry - 1.2*ATR
     const sup = sr?.sup?.price;
     sl = (sup && sup < entry && entry - sup < atr * 2) ? sup : entry - 1.2 * atr;
+    // TP = exactly 2× the SL distance → guarantees 2:1 gross R:R on every trade
+    tp = entry + 2 * (entry - sl);
   } else {
-    // TP = nearest support below entry (if within 3 ATR), else entry - 2*ATR
-    const sup = sr?.sup?.price;
-    tp = (sup && sup < entry && entry - sup < atr * 3) ? sup : entry - 2 * atr;
     // SL = nearest resistance above entry (if within 2 ATR), else entry + 1.2*ATR
     const res = sr?.res?.price;
     sl = (res && res > entry && res - entry < atr * 2) ? res : entry + 1.2 * atr;
+    // TP = exactly 2× the SL distance → guarantees 2:1 gross R:R on every trade
+    tp = entry - 2 * (sl - entry);
   }
   return { tp, sl };
 }
@@ -2227,15 +2225,17 @@ function btComputeTPSL(type, entry, atr, srData) {
   const minDist = entry * FEE_RT * 2; // TP must be at least 2× fee away to profit after costs
   let tp, sl;
   if (type === 'long') {
-    const res = srData?.res?.price;
-    tp = (res && res > entry && res - entry > minDist && res - entry < atr * 3) ? res : entry + Math.max(2 * atr, minDist);
+    // SL = nearest support below entry (if within 2 ATR), else entry - 1.2*ATR
     const sup = srData?.sup?.price;
     sl = (sup && sup < entry && entry - sup < atr * 2) ? sup : entry - 1.2 * atr;
+    // TP = exactly 2× the SL distance → guarantees 2:1 gross R:R on every trade
+    tp = entry + 2 * (entry - sl);
   } else {
-    const sup = srData?.sup?.price;
-    tp = (sup && sup < entry && entry - sup > minDist && entry - sup < atr * 3) ? sup : entry - Math.max(2 * atr, minDist);
+    // SL = nearest resistance above entry (if within 2 ATR), else entry + 1.2*ATR
     const res = srData?.res?.price;
     sl = (res && res > entry && res - entry < atr * 2) ? res : entry + 1.2 * atr;
+    // TP = exactly 2× the SL distance → guarantees 2:1 gross R:R on every trade
+    tp = entry - 2 * (sl - entry);
   }
   return { tp, sl };
 }
