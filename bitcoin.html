@@ -224,6 +224,39 @@
     .bt-pnl-neg { color:var(--red);font-weight:700; }
     .bt-pnl-neu { color:var(--muted);font-weight:700; }
     .bt-note { font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6; }
+
+    /* ── Live Simulation Panel ── */
+    .sim-panel { background:var(--surface);border:1px solid #00c97a55;border-radius:var(--r);padding:20px 24px;margin-bottom:14px; }
+    .sim-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:14px; }
+    .sim-title { font-size:14px;font-weight:800;color:var(--green);letter-spacing:.4px; }
+    .sim-subtitle { font-size:11px;color:var(--muted);margin-top:2px; }
+    .sim-controls { display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:14px; }
+    .sim-ctrl { display:flex;flex-direction:column;gap:4px; }
+    .sim-lbl { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px; }
+    .sim-input { background:var(--sur2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:8px 12px;font-size:13px;outline:none;transition:border-color .2s; }
+    .sim-input:focus { border-color:var(--green); }
+    .sim-btn-start { background:var(--green);color:#000;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .2s; }
+    .sim-btn-start:hover { opacity:.85; }
+    .sim-btn-stop  { background:var(--red);color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .2s; }
+    .sim-btn-stop:hover  { opacity:.85; }
+    .sim-stat-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:14px; }
+    .sim-stat { background:var(--sur2);border-radius:8px;padding:12px 14px; }
+    .sim-stat-lbl { font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px; }
+    .sim-stat-val { font-size:20px;font-weight:800; }
+    .sim-pos-bar { display:none;background:var(--sur2);border-radius:8px;padding:12px 16px;margin-bottom:12px;border-left:3px solid var(--muted); }
+    .sim-pos-bar.long-open  { border-color:var(--green); }
+    .sim-pos-bar.short-open { border-color:var(--red); }
+    .sim-pos-inner { display:flex;flex-wrap:wrap;gap:20px;align-items:center; }
+    .sim-pos-type { font-size:15px;font-weight:800; }
+    .sim-pos-detail { font-size:12px;color:var(--muted); }
+    .sim-pos-pnl { font-size:16px;font-weight:800; }
+    .sim-log { max-height:320px;overflow-y:auto;border-radius:8px;border:1px solid var(--border); }
+    .sim-log-table { width:100%;border-collapse:collapse;font-size:12px; }
+    .sim-log-table th { position:sticky;top:0;background:var(--sur2);padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap; }
+    .sim-log-table td { padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap; }
+    .sim-log-table tr:last-child td { border-bottom:none; }
+    .sim-log-table tr:hover td { background:rgba(255,255,255,.02); }
+    .sim-idle { font-size:12px;color:var(--muted);padding:20px;text-align:center; }
   </style>
 </head>
 <body>
@@ -311,6 +344,61 @@
     <div class="pos-holding" id="pos-holding">● Holding…</div>
   </div>
   <button class="pos-cancel" onclick="closePosition()">✕ Cancel</button>
+</div>
+
+<!-- live simulation panel -->
+<div class="sim-panel" id="sim-panel">
+  <div class="sim-header">
+    <div>
+      <div class="sim-title">⚡ LIVE SIMULATION — Auto-Trade Forward Test</div>
+      <div class="sim-subtitle">Enters LONG/SHORT automatically from live signal (full order book + all live data) · Tracks P&amp;L in real time</div>
+    </div>
+  </div>
+  <div class="sim-controls">
+    <div class="sim-ctrl">
+      <span class="sim-lbl">Min Confidence %</span>
+      <input class="sim-input" type="number" id="sim-conf" value="65" min="51" max="98" style="width:105px">
+    </div>
+    <div class="sim-ctrl">
+      <span class="sim-lbl">Trade Amount $</span>
+      <input class="sim-input" type="number" id="sim-amount" value="1000" min="1" style="width:120px">
+    </div>
+    <button class="sim-btn-start" id="sim-btn-start" onclick="simStart()">▶ Start Simulation</button>
+    <button class="sim-btn-stop"  id="sim-btn-stop"  onclick="simStop()" style="display:none">■ Stop Simulation</button>
+  </div>
+  <div id="sim-body" style="display:none">
+    <div class="sim-stat-grid" id="sim-stat-grid">
+      <div class="sim-stat"><div class="sim-stat-lbl">Total P&amp;L</div><div class="sim-stat-val" id="sim-total-pnl">$0.00</div></div>
+      <div class="sim-stat"><div class="sim-stat-lbl">Trades</div><div class="sim-stat-val" id="sim-trades">0</div></div>
+      <div class="sim-stat"><div class="sim-stat-lbl">Win Rate</div><div class="sim-stat-val" id="sim-winrate">—</div></div>
+      <div class="sim-stat"><div class="sim-stat-lbl">Avg Win</div><div class="sim-stat-val pos-tp-val" id="sim-avg-win">—</div></div>
+      <div class="sim-stat"><div class="sim-stat-lbl">Avg Loss</div><div class="sim-stat-val pos-sl-val" id="sim-avg-loss">—</div></div>
+      <div class="sim-stat"><div class="sim-stat-lbl">Running</div><div class="sim-stat-val" id="sim-running">0m</div></div>
+    </div>
+    <!-- current open sim position -->
+    <div class="sim-pos-bar" id="sim-pos-bar">
+      <div class="sim-pos-inner">
+        <span class="sim-pos-type" id="sim-pos-type">—</span>
+        <span class="sim-pos-detail" id="sim-pos-detail">—</span>
+        <span class="sim-pos-pnl"   id="sim-pos-pnl">—</span>
+        <span style="font-size:11px;color:var(--muted)" id="sim-pos-tpsl">—</span>
+      </div>
+    </div>
+    <!-- trade log -->
+    <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin:10px 0 6px">
+      Trade Log <span id="sim-log-meta" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)"></span>
+    </div>
+    <div class="sim-log" id="sim-log">
+      <div class="sim-idle" id="sim-idle-msg">Waiting for a signal above confidence threshold…</div>
+      <table class="sim-log-table" id="sim-log-table" style="display:none">
+        <thead><tr>
+          <th>#</th><th>Dir</th><th>Opened</th><th>Entry</th><th>Exit</th>
+          <th>TP</th><th>SL</th><th>Result</th><th>Net P&amp;L</th><th>Conf</th>
+        </tr></thead>
+        <tbody id="sim-log-body"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <!-- market structure row -->
@@ -1555,6 +1643,7 @@ async function refresh() {
     renderPosition(price, result.score);
     updateLiqRadar(price, liqs);
     updateTradePreview();
+    simTick(price, result);
 
     document.getElementById('refresh-txt').textContent=`Live · ${new Date().toLocaleTimeString()}`;
   } catch(err) {
@@ -1995,6 +2084,15 @@ function initWebSocket() {
       const chEl = document.getElementById('p-change');
       const ch   = +t.P;
       if (chEl) { chEl.textContent = `${ch>=0?'+':''}${ch.toFixed(2)}%`; chEl.className='value '+(ch>=0?'up':'down'); }
+      // Real-time sim TP/SL check (sub-second) + live P&L refresh
+      simCheckTPSL(lastPrice);
+      if (simActive && simPosition) {
+        const sp   = simPosition;
+        const sdir = sp.type === 'long' ? 1 : -1;
+        const slp  = sdir * (lastPrice - sp.entry) / sp.entry * sp.tradeAmt - sp.tradeAmt * FEE_RT;
+        const slEl = document.getElementById('sim-pos-pnl');
+        if (slEl) { slEl.textContent = (slp>=0?'+':'')+'$'+slp.toFixed(2); slEl.style.color=slp>=0?'var(--green)':'var(--red)'; }
+      }
       // Real-time P&L in position panel
       if (position) {
         const isLong = position.type === 'long';
@@ -2054,6 +2152,191 @@ initWebSocket();
 refreshOI();        setInterval(refreshOI,        60_000);
 refreshFunding();   setInterval(refreshFunding,   300_000);
 refreshFearGreed(); setInterval(refreshFearGreed, 1_800_000);
+
+/* ═══════════════════════════════════════════════════
+   LIVE SIMULATION ENGINE
+═══════════════════════════════════════════════════ */
+let simActive    = false;
+let simPosition  = null; // { type, entry, tp, sl, entryTime, conf, tradeAmt }
+let simTrades    = [];   // closed trades
+let simMinConf   = 65;
+let simTradeAmt  = 1000;
+let simStartTime = null;
+let simLastResult = null; // last computeSignal result for signal-reversal exits
+
+function simStart() {
+  simMinConf  = Math.max(51, +(document.getElementById('sim-conf').value)   || 65);
+  simTradeAmt = Math.max(1,  +(document.getElementById('sim-amount').value) || 1000);
+  simActive    = true;
+  simPosition  = null;
+  simTrades    = [];
+  simStartTime = Date.now();
+  simLastResult = null;
+
+  document.getElementById('sim-btn-start').style.display = 'none';
+  document.getElementById('sim-btn-stop').style.display  = '';
+  document.getElementById('sim-conf').disabled   = true;
+  document.getElementById('sim-amount').disabled = true;
+  document.getElementById('sim-body').style.display = '';
+  document.getElementById('sim-idle-msg').style.display = '';
+  document.getElementById('sim-log-table').style.display = 'none';
+  document.getElementById('sim-log-body').innerHTML = '';
+  simRender();
+}
+
+function simStop() {
+  if (simPosition && lastPrice) {
+    simClosePosition(lastPrice, 'manual');
+  }
+  simActive = false;
+  document.getElementById('sim-btn-start').style.display = '';
+  document.getElementById('sim-btn-stop').style.display  = 'none';
+  document.getElementById('sim-conf').disabled   = false;
+  document.getElementById('sim-amount').disabled = false;
+  simRender();
+}
+
+function simOpenPosition(type, price, conf) {
+  const { tp, sl } = computeTPSL(type, price);
+  simPosition = { type, entry: price, tp, sl, entryTime: Date.now(), conf, tradeAmt: simTradeAmt };
+}
+
+function simClosePosition(exitPrice, reason) {
+  if (!simPosition) return;
+  const p   = simPosition;
+  const dir = p.type === 'long' ? 1 : -1;
+  const pnl = dir * (exitPrice - p.entry) / p.entry * p.tradeAmt - p.tradeAmt * FEE_RT;
+  simTrades.unshift({
+    n:        simTrades.length + 1,
+    type:     p.type,
+    entryTime: p.entryTime,
+    entry:    p.entry,
+    exit:     exitPrice,
+    tp:       p.tp,
+    sl:       p.sl,
+    reason,
+    pnl,
+    conf:     p.conf,
+  });
+  simPosition = null;
+}
+
+/* Called every 5 s from refresh() — checks signal-based entry/exit */
+function simTick(price, result) {
+  if (!simActive) return;
+  simLastResult = result;
+
+  if (simPosition) {
+    // Signal reversal exit (hard close when signal flips)
+    const rev = (simPosition.type === 'long'  && result.signal === 'SHORT' && result.confidence >= simMinConf)
+             || (simPosition.type === 'short' && result.signal === 'LONG'  && result.confidence >= simMinConf);
+    if (rev) simClosePosition(price, 'reversal');
+  }
+
+  if (!simPosition && result.signal !== 'HOLD' && result.confidence >= simMinConf) {
+    simOpenPosition(result.signal.toLowerCase(), price, result.confidence);
+  }
+
+  simRender();
+}
+
+/* Called from WebSocket ticker for sub-second TP/SL detection */
+function simCheckTPSL(price) {
+  if (!simActive || !simPosition) return;
+  const p = simPosition;
+  if (p.type === 'long') {
+    if (price >= p.tp) { simClosePosition(p.tp, 'TP'); simRender(); return; }
+    if (price <= p.sl) { simClosePosition(p.sl, 'SL'); simRender(); return; }
+  } else {
+    if (price <= p.tp) { simClosePosition(p.tp, 'TP'); simRender(); return; }
+    if (price >= p.sl) { simClosePosition(p.sl, 'SL'); simRender(); return; }
+  }
+}
+
+function simFmtDur(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60)  return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+}
+
+function simRender() {
+  if (!simActive && !simTrades.length) return;
+
+  // Running time
+  if (simStartTime) {
+    document.getElementById('sim-running').textContent = simFmtDur(Date.now() - simStartTime);
+  }
+
+  // Stats
+  const closed = simTrades;
+  const totalPnl = closed.reduce((s, t) => s + t.pnl, 0);
+  const wins     = closed.filter(t => t.pnl > 0);
+  const losses   = closed.filter(t => t.pnl <= 0);
+  const winRate  = closed.length ? Math.round(wins.length / closed.length * 100) : null;
+  const avgWin   = wins.length   ? wins.reduce((s,t)=>s+t.pnl, 0) / wins.length  : null;
+  const avgLoss  = losses.length ? losses.reduce((s,t)=>s+t.pnl, 0) / losses.length : null;
+
+  const pnlEl = document.getElementById('sim-total-pnl');
+  pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2);
+  pnlEl.style.color = totalPnl > 0 ? 'var(--green)' : totalPnl < 0 ? 'var(--red)' : 'var(--text)';
+
+  document.getElementById('sim-trades').textContent  = closed.length;
+  document.getElementById('sim-winrate').textContent = winRate !== null ? winRate + '%' : '—';
+  document.getElementById('sim-avg-win').textContent  = avgWin  !== null ? '+$' + avgWin.toFixed(2)  : '—';
+  document.getElementById('sim-avg-loss').textContent = avgLoss !== null ? '$'  + avgLoss.toFixed(2) : '—';
+
+  // Meta line
+  document.getElementById('sim-log-meta').textContent =
+    closed.length ? `· ${closed.length} closed · ${wins.length}W / ${losses.length}L` : '';
+
+  // Current position bar
+  const bar = document.getElementById('sim-pos-bar');
+  if (simPosition) {
+    const p    = simPosition;
+    const cur  = lastPrice || p.entry;
+    const dir  = p.type === 'long' ? 1 : -1;
+    const livePnl = dir * (cur - p.entry) / p.entry * p.tradeAmt - p.tradeAmt * FEE_RT;
+    bar.style.display = '';
+    bar.className = 'sim-pos-bar ' + (p.type === 'long' ? 'long-open' : 'short-open');
+    document.getElementById('sim-pos-type').textContent    = p.type === 'long' ? '▲ LONG' : '▼ SHORT';
+    document.getElementById('sim-pos-type').style.color    = p.type === 'long' ? 'var(--green)' : 'var(--red)';
+    document.getElementById('sim-pos-detail').textContent  =
+      `Entry $${p.entry.toFixed(2)} · open ${simFmtDur(Date.now()-p.entryTime)} · conf ${p.conf}%`;
+    const pnlSpan = document.getElementById('sim-pos-pnl');
+    pnlSpan.textContent = (livePnl >= 0 ? '+' : '') + '$' + livePnl.toFixed(2);
+    pnlSpan.style.color = livePnl >= 0 ? 'var(--green)' : 'var(--red)';
+    document.getElementById('sim-pos-tpsl').textContent =
+      `TP $${p.tp.toFixed(2)} · SL $${p.sl.toFixed(2)}`;
+  } else {
+    bar.style.display = 'none';
+  }
+
+  // Idle message vs table
+  if (closed.length) {
+    document.getElementById('sim-idle-msg').style.display  = 'none';
+    document.getElementById('sim-log-table').style.display = '';
+    const tbody = document.getElementById('sim-log-body');
+    tbody.innerHTML = closed.map(t => {
+      const pnlCls = t.pnl > 0 ? 'bt-pnl-pos' : t.pnl < 0 ? 'bt-pnl-neg' : 'bt-pnl-neu';
+      const resCls = t.reason === 'TP' ? 'bt-pnl-pos' : t.reason === 'SL' ? 'bt-pnl-neg' : 'bt-pnl-neu';
+      const dirCls = t.type === 'long' ? 'up' : 'down';
+      const opened = new Date(t.entryTime).toLocaleTimeString();
+      return `<tr>
+        <td>${t.n}</td>
+        <td class="${dirCls}">${t.type.toUpperCase()}</td>
+        <td>${opened}</td>
+        <td>$${t.entry.toFixed(2)}</td>
+        <td>$${t.exit.toFixed(2)}</td>
+        <td class="bt-pnl-pos">$${t.tp.toFixed(2)}</td>
+        <td class="bt-pnl-neg">$${t.sl.toFixed(2)}</td>
+        <td class="${resCls}">${t.reason}</td>
+        <td class="${pnlCls}">${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}</td>
+        <td>${t.conf}%</td>
+      </tr>`;
+    }).join('');
+  }
+}
 
 /* ═══════════════════════════════════════════════════
    BACKTEST ENGINE
