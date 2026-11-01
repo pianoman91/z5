@@ -34,6 +34,11 @@
     .title { font-size:22px;font-weight:700;letter-spacing:-.4px; }
     .subtitle { font-size:12px;color:var(--muted);margin-top:2px; }
     #refresh-badge { font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:4px 12px;display:flex;align-items:center;gap:6px; }
+    /* ── Coin switcher ── */
+    .coin-switch { display:flex;gap:0;background:var(--sur2);border:1px solid var(--border);border-radius:8px;overflow:hidden; }
+    .coin-switch-btn { padding:7px 18px;font-size:13px;font-weight:700;cursor:pointer;border:none;background:transparent;color:var(--muted);transition:all .2s;letter-spacing:.3px; }
+    .coin-switch-btn:hover { color:var(--text); }
+    .coin-switch-btn.active { background:var(--accent);color:#fff; }
     .dot { width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 1.5s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
 
@@ -264,13 +269,19 @@
 <!-- header -->
 <div class="header">
   <div class="header-left">
-    <div class="btc-icon">₿</div>
+    <div class="btc-icon" id="header-icon">₿</div>
     <div>
-      <div class="title">BTC / USDT</div>
+      <div class="title"><span id="header-symbol">BTC</span> / USDT</div>
       <div class="subtitle">Leveraged Day Trading Dashboard · Binance 15m + 1m</div>
     </div>
   </div>
-  <div id="refresh-badge"><span class="dot"></span><span id="refresh-txt">Loading…</span></div>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div class="coin-switch" id="coin-switch">
+      <button class="coin-switch-btn active" id="csw-BTC" onclick="switchSymbol('BTC')">₿ BTC</button>
+      <button class="coin-switch-btn"        id="csw-LAB" onclick="switchSymbol('LAB')">🧪 LAB</button>
+    </div>
+    <div id="refresh-badge"><span class="dot"></span><span id="refresh-txt">Loading…</span></div>
+  </div>
 </div>
 
 <!-- price strip -->
@@ -279,7 +290,7 @@
   <div class="price-card"><div class="label">24h Change</div><div class="value" id="p-change">—</div></div>
   <div class="price-card"><div class="label">24h High</div><div class="value up" id="p-high">—</div></div>
   <div class="price-card"><div class="label">24h Low</div><div class="value down" id="p-low">—</div></div>
-  <div class="price-card"><div class="label">24h Volume (BTC)</div><div class="value" id="p-vol">—</div></div>
+  <div class="price-card"><div class="label">24h Volume (<span id="p-vol-label">BTC</span>)</div><div class="value" id="p-vol">—</div></div>
 </div>
 
 <!-- signal -->
@@ -526,12 +537,17 @@
 /* ═══════════════════════════════════════════════════
    TRADINGVIEW CHART
 ═══════════════════════════════════════════════════ */
+/* ── Active coin ── */
+let currentSymbol = 'BTC';   // 'BTC' or 'LAB'
+let currentPair   = 'BTCUSDT'; // e.g. 'BTCUSDT' / 'LABUSDT'
+let currentStream = 'btcusdt'; // lowercase for WS streams
+
 let currentTf = '15';
 function buildChart(tf) {
   const wrap = document.getElementById('tv-chart');
   wrap.innerHTML = '';
   new TradingView.widget({
-    container_id: 'tv-chart', symbol: 'BINANCE:BTCUSDT', interval: tf,
+    container_id: 'tv-chart', symbol: `BINANCE:${currentPair}`, interval: tf,
     timezone: 'Etc/UTC', theme: 'dark', style: '1', locale: 'en',
     toolbar_bg: '#16181d', enable_publishing: false, hide_side_toolbar: false,
     allow_symbol_change: false,
@@ -548,6 +564,38 @@ document.getElementById('tf-row').addEventListener('click', e => {
   currentTf = btn.dataset.tv;
   buildChart(currentTf);
 });
+
+/* ── Coin switcher ── */
+function switchSymbol(sym) {
+  if (sym === currentSymbol) return;
+  currentSymbol = sym;
+  currentPair   = sym + 'USDT';
+  currentStream = (sym + 'usdt').toLowerCase();
+
+  // Update header
+  document.getElementById('header-symbol').textContent = sym;
+  document.getElementById('p-vol-label').textContent   = sym;
+  const icon = document.getElementById('header-icon');
+  icon.textContent = sym === 'BTC' ? '₿' : sym.charAt(0);
+
+  // Update switcher buttons
+  document.querySelectorAll('.coin-switch-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById(`csw-${sym}`);
+  if (btn) btn.classList.add('active');
+
+  // Reset live data (stale values from previous coin)
+  lastPrice = null; lastATR = null; lastSRData = null;
+  lastScore = 0;    lastConfidence = 0; lastRegime = 'neutral';
+  wsOBImbalance = null; wsOIDelta = null; wsOI = null;
+  // Note: wsFundingRate and wsFearGreed reset via their own polls
+
+  // Rebuild chart + reconnect WebSocket + refresh data
+  buildChart(currentTf);
+  initWebSocket();
+  refresh();
+  refreshOI();
+  refreshFunding();
+}
 
 /* ═══════════════════════════════════════════════════
    MATH HELPERS
@@ -1491,26 +1539,26 @@ function updateIndicators(d, result) {
    BINANCE FETCH
 ═══════════════════════════════════════════════════ */
 async function fetchTicker() {
-  const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+  const r = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${currentPair}`);
   return r.json();
 }
 async function fetchKlines(interval='15m', limit=200) {
-  const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
+  const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${currentPair}&interval=${interval}&limit=${limit}`);
   const raw = await r.json();
   // k[9] = taker buy base volume — used for CVD
   return raw.map(k=>({open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5],takerBuyVol:+k[9]}));
 }
 async function fetchOrderBook() {
-  const r = await fetch('https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20');
+  const r = await fetch(`https://api.binance.com/api/v3/depth?symbol=${currentPair}&limit=20`);
   return r.json(); // { bids:[[price,qty],...], asks:[[price,qty],...] }
 }
 async function fetchFundingRate() {
-  const r = await fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1');
+  const r = await fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${currentPair}&limit=1`);
   const d = await r.json();
-  return d.length ? +d[0].fundingRate : null;
+  return (Array.isArray(d) && d.length) ? +d[0].fundingRate : null;
 }
 async function fetchOpenInterest() {
-  const r = await fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT');
+  const r = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${currentPair}`);
   const d = await r.json();
   return d.openInterest ? +d.openInterest : null;
 }
@@ -1898,7 +1946,7 @@ function renderPosition(price, score) {
    LIQUIDATION RADAR
 ═══════════════════════════════════════════════════ */
 async function fetchLiquidations() {
-  const url = 'https://fapi.binance.com/fapi/v1/allForceOrders?symbol=BTCUSDT&limit=200';
+  const url = `https://fapi.binance.com/fapi/v1/allForceOrders?symbol=${currentPair}&limit=200`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('liq fetch failed');
   return res.json();
@@ -2060,10 +2108,15 @@ function renderPaperStats() {
 /* ═══════════════════════════════════════════════════
    WEBSOCKET — real-time price + order book (sub-second)
 ═══════════════════════════════════════════════════ */
+let wsInstance = null; // kept so switchSymbol() can close it
+
 function initWebSocket() {
+  const sym = currentStream; // capture at open time
+  if (wsInstance) { try { wsInstance.close(); } catch(_) {} }
   const ws = new WebSocket(
-    'wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/btcusdt@depth20@100ms'
+    `wss://stream.binance.com:9443/stream?streams=${sym}@ticker/${sym}@depth20@100ms`
   );
+  wsInstance = ws;
 
   ws.onopen = () => {
     wsConnected = true;
@@ -2073,7 +2126,7 @@ function initWebSocket() {
   ws.onmessage = e => {
     const msg = JSON.parse(e.data);
 
-    if (msg.stream === 'btcusdt@ticker') {
+    if (msg.stream === `${sym}@ticker`) {
       const t   = msg.data;
       lastPrice = +t.c;
       // Real-time price card (no full indicator recompute needed)
@@ -2118,7 +2171,8 @@ function initWebSocket() {
   ws.onclose = () => {
     wsConnected = false;
     document.getElementById('refresh-badge').style.borderColor = 'var(--border)';
-    setTimeout(initWebSocket, 3_000); // auto-reconnect
+    // Only auto-reconnect if this ws is still the active instance (not replaced by switchSymbol)
+    if (wsInstance === ws) setTimeout(initWebSocket, 3_000);
   };
 
   ws.onerror = () => ws.close();
@@ -2357,7 +2411,7 @@ async function fetchKlinesHistory(interval, startMs, endMs) {
   const all = [];
   let cursor = startMs;
   while (cursor < endMs) {
-    const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&startTime=${cursor}&endTime=${endMs}&limit=1000`;
+    const url = `https://api.binance.com/api/v3/klines?symbol=${currentPair}&interval=${interval}&startTime=${cursor}&endTime=${endMs}&limit=1000`;
     const r   = await fetch(url);
     const raw = await r.json();
     if (!Array.isArray(raw) || !raw.length) break;
@@ -2376,7 +2430,7 @@ async function fetchFundingHistory(startMs, endMs) {
   const all = [];
   let cursor = startMs;
   while (cursor < endMs) {
-    const url = `https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&startTime=${cursor}&endTime=${endMs}&limit=1000`;
+    const url = `https://fapi.binance.com/fapi/v1/fundingRate?symbol=${currentPair}&startTime=${cursor}&endTime=${endMs}&limit=1000`;
     const r   = await fetch(url);
     const raw = await r.json();
     if (!Array.isArray(raw) || !raw.length) break;
@@ -2393,7 +2447,7 @@ async function fetchOIHistory(startMs, endMs) {
   const all = [];
   let cursor = startMs;
   while (cursor < endMs) {
-    const url = `https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=15m&startTime=${cursor}&endTime=${endMs}&limit=500`;
+    const url = `https://fapi.binance.com/futures/data/openInterestHist?symbol=${currentPair}&period=15m&startTime=${cursor}&endTime=${endMs}&limit=500`;
     const r   = await fetch(url);
     const raw = await r.json();
     if (!Array.isArray(raw) || !raw.length) break;
