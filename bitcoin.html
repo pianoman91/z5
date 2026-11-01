@@ -587,11 +587,13 @@ function switchSymbol(sym) {
   lastPrice = null; lastATR = null; lastSRData = null;
   lastScore = 0;    lastConfidence = 0; lastRegime = 'neutral';
   wsOBImbalance = null; wsOIDelta = null; wsOI = null;
+  liqBuffer = []; // clear liq history — it was for the old symbol
   // Note: wsFundingRate and wsFearGreed reset via their own polls
 
-  // Rebuild chart + reconnect WebSocket + refresh data
+  // Rebuild chart + reconnect WebSockets + refresh data
   buildChart(currentTf);
   initWebSocket();
+  initLiqWS();
   refresh();
   refreshOI();
   refreshFunding();
@@ -1945,12 +1947,9 @@ function renderPosition(price, score) {
 /* ═══════════════════════════════════════════════════
    LIQUIDATION RADAR
 ═══════════════════════════════════════════════════ */
-async function fetchLiquidations() {
-  const url = `https://fapi.binance.com/fapi/v1/allForceOrders?symbol=${currentPair}&limit=200`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('liq fetch failed');
-  return res.json();
-}
+/* Liquidation data is now fed by the force-order WebSocket stream below.
+   This stub is kept so the refresh() call signature doesn't change. */
+async function fetchLiquidations() { return liqBuffer; }
 
 function fmtM(v) {
   if (v >= 1e6)  return `$${(v/1e6).toFixed(2)}M`;
@@ -2023,7 +2022,7 @@ function updateLiqRadar(price, liqs) {
     return `<div class="ph-row">
       <span class="ph-badge ${cls}">${typeStr} LIQ</span>
       <span class="ph-meta">@ ${fmt2d(+l.averagePrice)}</span>
-      <span class="ph-meta">${(+l.origQty).toFixed(3)} BTC</span>
+      <span class="ph-meta">${(+l.origQty).toFixed(3)} ${currentSymbol}</span>
       <span class="ph-pnl ${isLong?'loss':'win'}" style="margin-left:auto">${fmtM(l.usd)}</span>
       <span class="ph-meta">${minsAgo}m ago</span>
     </div>`;
@@ -2103,6 +2102,46 @@ function renderPaperStats() {
       <span class="ph-meta">${t.time.toLocaleTimeString()}</span>
     </div>`;
   }).join('');
+}
+
+/* ═══════════════════════════════════════════════════
+   LIQUIDATION BUFFER — fed by fstream force-order WS
+   Binance's REST allForceOrders endpoint is now auth-only;
+   the public stream !forceOrder@arr still works.
+═══════════════════════════════════════════════════ */
+let liqBuffer    = []; // rolling 2h window of force orders for currentPair
+let liqWsInstance = null;
+
+function initLiqWS() {
+  if (liqWsInstance) { try { liqWsInstance.close(); } catch(_) {} }
+  const ws = new WebSocket('wss://fstream.binance.com/ws/!forceOrder@arr');
+  liqWsInstance = ws;
+
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    const o   = msg?.o;
+    if (!o || o.s !== currentPair) return; // filter to active symbol
+
+    // Normalise to the same shape updateLiqRadar() expects
+    liqBuffer.push({
+      side:         o.S,          // 'BUY' | 'SELL'
+      averagePrice: o.ap,
+      origQty:      o.q,
+      time:         o.T,
+    });
+
+    // Keep only last 2 h to bound memory
+    const cutoff2h = Date.now() - 7_200_000;
+    liqBuffer = liqBuffer.filter(l => l.time > cutoff2h);
+
+    // Live update radar on every liq event (no need to wait for 5s refresh)
+    if (lastPrice) updateLiqRadar(lastPrice, liqBuffer);
+  };
+
+  ws.onclose = () => {
+    if (liqWsInstance === ws) setTimeout(initLiqWS, 5_000);
+  };
+  ws.onerror = () => ws.close();
 }
 
 /* ═══════════════════════════════════════════════════
@@ -2203,6 +2242,7 @@ refresh();
 setInterval(refresh, 5_000);
 
 initWebSocket();
+initLiqWS();
 refreshOI();        setInterval(refreshOI,        60_000);
 refreshFunding();   setInterval(refreshFunding,   300_000);
 refreshFearGreed(); setInterval(refreshFearGreed, 1_800_000);
