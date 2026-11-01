@@ -278,7 +278,7 @@
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <div class="coin-switch" id="coin-switch">
       <button class="coin-switch-btn active" id="csw-BTC" onclick="switchSymbol('BTC')">₿ BTC</button>
-      <button class="coin-switch-btn"        id="csw-LAB" onclick="switchSymbol('LAB')">🧪 LAB</button>
+      <button class="coin-switch-btn"        id="csw-SOL" onclick="switchSymbol('SOL')">◎ SOL</button>
     </div>
     <div id="refresh-badge"><span class="dot"></span><span id="refresh-txt">Loading…</span></div>
   </div>
@@ -538,8 +538,8 @@
    TRADINGVIEW CHART
 ═══════════════════════════════════════════════════ */
 /* ── Active coin ── */
-let currentSymbol = 'BTC';   // 'BTC' or 'LAB'
-let currentPair   = 'BTCUSDT'; // e.g. 'BTCUSDT' / 'LABUSDT'
+let currentSymbol = 'BTC';   // 'BTC' or 'SOL'
+let currentPair   = 'BTCUSDT'; // e.g. 'BTCUSDT' / 'SOLUSDT'
 let currentStream = 'btcusdt'; // lowercase for WS streams
 
 let currentTf = '15';
