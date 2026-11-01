@@ -505,6 +505,12 @@
         1m scalp layer<br><span style="font-size:10px;color:var(--muted)">(~30–60s extra)</span>
       </label>
     </div>
+    <div class="bt-ctrl" style="align-items:center">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--muted)">
+        <input type="checkbox" id="bt-trending-only" style="accent-color:var(--accent);width:14px;height:14px">
+        Trending only<br><span style="font-size:10px;color:var(--muted)">(skip ranging/neutral)</span>
+      </label>
+    </div>
     <button class="bt-run" id="bt-run-btn" onclick="runBacktest()">▶ Run Backtest</button>
   </div>
   <div class="bt-progress" id="bt-progress" style="display:none">
@@ -2599,19 +2605,20 @@ function btBuildData(win15m, win4h, win1d, extras = {}) {
 
 /* TP/SL from ATR + SR, no globals */
 function btComputeTPSL(type, entry, atr, srData) {
-  const minDist = entry * FEE_RT * 2; // TP must be at least 2× fee away to profit after costs
+  // Minimum viable SL distance: must be at least 3× the round-trip fee so that
+  // even after fee costs there is meaningful risk. Below this threshold the trade
+  // is a pure fee burn and should be skipped (returns null).
+  const minSlDist = entry * FEE_RT * 3;
   let tp, sl;
   if (type === 'long') {
-    // SL = nearest support below entry (if within 2 ATR), else entry - 1.2*ATR
     const sup = srData?.sup?.price;
     sl = (sup && sup < entry && entry - sup < atr * 2) ? sup : entry - 1.2 * atr;
-    // TP = exactly 2× the SL distance → guarantees 2:1 gross R:R on every trade
+    if (entry - sl < minSlDist) return null; // degenerate — skip this trade
     tp = entry + 2 * (entry - sl);
   } else {
-    // SL = nearest resistance above entry (if within 2 ATR), else entry + 1.2*ATR
     const res = srData?.res?.price;
     sl = (res && res > entry && res - entry < atr * 2) ? res : entry + 1.2 * atr;
-    // TP = exactly 2× the SL distance → guarantees 2:1 gross R:R on every trade
+    if (sl - entry < minSlDist) return null; // degenerate — skip this trade
     tp = entry - 2 * (sl - entry);
   }
   return { tp, sl };
@@ -2632,8 +2639,9 @@ async function runBacktest() {
   try {
     const startDate = document.getElementById('bt-start').value;
     const endDate   = document.getElementById('bt-end').value;
-    const minConf   = Math.max(51, Math.min(98, +document.getElementById('bt-conf').value || 65));
-    const tradeAmt  = Math.max(1, +document.getElementById('bt-amount').value || 1000);
+    const minConf      = Math.max(51, Math.min(98, +document.getElementById('bt-conf').value || 65));
+    const tradeAmt     = Math.max(1, +document.getElementById('bt-amount').value || 1000);
+    const trendingOnly = document.getElementById('bt-trending-only')?.checked ?? false;
 
     if (!startDate || !endDate || startDate >= endDate) {
       alert('Please enter a valid date range (start < end).');
@@ -2758,9 +2766,14 @@ async function runBacktest() {
         const sig = computeSignal(d);
 
         if (sig.signal !== 'HOLD' && sig.confidence >= minConf) {
+          // Regime filter: skip if trending-only mode is on and market is not trending
+          if (trendingOnly && sig.regime !== 'trending') continue;
+
           const entry = bar.close;
           const atr   = d.atrVal || entry * 0.01;
-          const { tp, sl } = btComputeTPSL(sig.signal === 'LONG' ? 'long' : 'short', entry, atr, d.srData);
+          const tpsl  = btComputeTPSL(sig.signal === 'LONG' ? 'long' : 'short', entry, atr, d.srData);
+          if (!tpsl) continue; // degenerate TP/SL — skip pure fee-burn trade
+          const { tp, sl } = tpsl;
           position = { type: sig.signal, entry, tp, sl, openTime: bar.openTime, barIdx: i,
                        confidence: sig.confidence, regime: sig.regime };
         }
